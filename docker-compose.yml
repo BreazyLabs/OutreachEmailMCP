@@ -2,15 +2,19 @@ services:
   outreachemailmcp:
     build: .
     restart: unless-stopped
+    # HTTP (UI + REST + MCP) is NOT host-published by default: on Dokploy /
+    # Traefik setups, attach a domain to container port 3000 — the proxy
+    # reaches it over the docker network, and publishing it would conflict
+    # with whatever already uses host port 3000. For plain `docker compose up`
+    # without a reverse proxy, copy docker-compose.override.example.yml to
+    # docker-compose.override.yml to publish it.
+    expose:
+      - "3000"
     ports:
-      # HTTP (UI + REST + MCP). On Dokploy: attach a domain to container port
-      # 3000 instead (Traefik handles TLS) and DELETE this mapping to avoid
-      # host-port conflicts.
-      - "3000:3000"
       # SMTP + IMAP are raw TCP — these must stay host-published (a reverse
       # proxy like Traefik does not route them by default).
-      - "2525:2525"
-      - "1143:1143"
+      - "${SMTP_PUBLISH_PORT:-2525}:2525"
+      - "${IMAP_PUBLISH_PORT:-1143}:1143"
     environment:
       MASTER_KEY: ${MASTER_KEY:?Set MASTER_KEY (openssl rand -base64 32)}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD}

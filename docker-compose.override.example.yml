@@ -1,0 +1,7 @@
+# For running WITHOUT a reverse proxy (plain `docker compose up` on your
+# machine): copy to docker-compose.override.yml to publish the HTTP port.
+# Do NOT use this on Dokploy — attach a domain to container port 3000 instead.
+services:
+  outreachemailmcp:
+    ports:
+      - "${HTTP_PUBLISH_PORT:-3000}:3000"
