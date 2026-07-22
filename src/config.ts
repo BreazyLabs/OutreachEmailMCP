@@ -58,9 +58,25 @@ const envSchema = z.object({
 
   // --- SaaS mode (multi-tenant with signup + quotas; off = self-hosted) ---
   SAAS_MODE: boolFromEnv,
-  STRIPE_SECRET_KEY: z.string().optional(),
-  STRIPE_WEBHOOK_SECRET: z.string().optional(),
-  STRIPE_PRICE_PRO: z.string().optional(),
+  STRIPE_SECRET_KEY: z
+    .string()
+    .optional()
+    .refine((v) => !v || v.startsWith('sk_') || v.startsWith('rk_'), {
+      message: 'STRIPE_SECRET_KEY must be a secret key (sk_live_… / sk_test_…), not a publishable key',
+    }),
+  STRIPE_WEBHOOK_SECRET: z
+    .string()
+    .optional()
+    .refine((v) => !v || v.startsWith('whsec_'), {
+      message: 'STRIPE_WEBHOOK_SECRET must be a webhook signing secret (whsec_…)',
+    }),
+  STRIPE_PRICE_PRO: z
+    .string()
+    .optional()
+    .refine((v) => !v || v.startsWith('price_'), {
+      message:
+        'STRIPE_PRICE_PRO must be a Stripe Price ID (price_…) — create a recurring price in Product catalog and copy its API ID, not the numeric amount',
+    }),
   PLAN_FREE_MAX_ACCOUNTS: z.coerce.number().int().default(2),
   PLAN_FREE_DAILY_SENDS: z.coerce.number().int().default(100),
   PLAN_PRO_MAX_ACCOUNTS: z.coerce.number().int().default(50),
