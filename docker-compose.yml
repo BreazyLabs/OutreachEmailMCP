@@ -34,6 +34,7 @@ services:
       STRIPE_PRICE_PRO: ${STRIPE_PRICE_PRO:-}
       SMTP_TLS_CERT: ${SMTP_TLS_CERT:-}
       SMTP_TLS_KEY: ${SMTP_TLS_KEY:-}
+      MAIL_HOST: ${MAIL_HOST:-}
     volumes:
       # Everything lives here: SQLite DB (accounts, encrypted tokens, queue),
       # message spool, TLS certs. Back this volume up.

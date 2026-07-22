@@ -30,6 +30,10 @@ const envSchema = z.object({
   SMTP_ALLOW_INSECURE_AUTH: boolFromEnv,
   SMTP_TLS_CERT: z.string().optional(),
   SMTP_TLS_KEY: z.string().optional(),
+  // Hostname advertised to mail clients (CSV exports, UI) for SMTP/IMAP.
+  // Defaults to BASE_URL's hostname — override when that domain sits behind a
+  // proxying CDN (e.g. Cloudflare) that doesn't forward raw TCP ports.
+  MAIL_HOST: z.string().optional(),
 
   IMAP_PORT: z.coerce.number().int().default(1143),
   IMAP_BIND: z.string().default('127.0.0.1'),

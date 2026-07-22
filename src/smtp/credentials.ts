@@ -26,8 +26,9 @@ export function createSmtpCredential(account: Account): { username: string; pass
   return { username, password };
 }
 
-// Hostname external clients should use to reach the SMTP listener.
+// Hostname external clients should use to reach the SMTP/IMAP listeners.
 export function smtpAdvertisedHost(): string {
+  if (config.MAIL_HOST) return config.MAIL_HOST;
   return config.SMTP_BIND === '0.0.0.0' ? new URL(config.BASE_URL).hostname : config.SMTP_BIND;
 }
 
