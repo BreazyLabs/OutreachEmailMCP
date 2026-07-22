@@ -12,6 +12,16 @@ import { requireUiSession, verifyCsrf } from '../ui/session.js';
 
 const STRIPE_API = 'https://api.stripe.com/v1';
 
+// Marker distinguishing this platform's objects on a Stripe account shared
+// with other apps: we stamp it on checkout sessions + subscriptions we
+// create, and the webhook ignores any event object that lacks it.
+const APP_MARKER = 'outreachemailmcp';
+
+function isOurs(object: Record<string, unknown>): boolean {
+  const metadata = object.metadata as Record<string, string> | null | undefined;
+  return metadata?.app === APP_MARKER;
+}
+
 async function stripeRequest(
   path: string,
   params: Record<string, string>,
@@ -67,6 +77,12 @@ export function registerBillingRoutes(app: FastifyInstance): void {
       'line_items[0][quantity]': '1',
       client_reference_id: session.org.id,
       customer_email: session.user.email,
+      // Tag both the session and the resulting subscription so the webhook
+      // can tell our events apart from other apps on the same Stripe account
+      'metadata[app]': APP_MARKER,
+      'metadata[org_id]': session.org.id,
+      'subscription_data[metadata][app]': APP_MARKER,
+      'subscription_data[metadata][org_id]': session.org.id,
       success_url: `${base}/ui/billing`,
       cancel_url: `${base}/ui/billing`,
     });
@@ -106,6 +122,12 @@ export function registerBillingRoutes(app: FastifyInstance): void {
         data: { object: Record<string, unknown> };
       };
       const object = event.data.object;
+      // A shared Stripe account delivers other apps' events here too — only
+      // act on objects carrying our marker; everything else is acknowledged
+      // and ignored (200, so Stripe doesn't retry or disable the endpoint).
+      if (!isOurs(object)) {
+        return { received: true, ignored: 'not an OutreachEmailMCP object' };
+      }
       if (event.type === 'checkout.session.completed') {
         const orgId = String(object.client_reference_id ?? '');
         if (orgId) {
