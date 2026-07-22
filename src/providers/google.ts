@@ -19,17 +19,32 @@ const FOLDER_LABELS: Record<CanonicalFolder, string> = {
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const UPLOAD_API = 'https://gmail.googleapis.com/upload/gmail/v1/users/me';
 
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+
 async function gmailFetch(
   accountId: string,
   url: string,
   init: RequestInit = {},
+  attempt = 0,
 ): Promise<Response> {
   const token = await getAccessToken(accountId);
   const res = await fetch(url, {
     ...init,
     headers: { Authorization: `Bearer ${token}`, ...(init.headers ?? {}) },
   });
-  if (!res.ok) await throwForResponse(res, `Gmail ${init.method ?? 'GET'} ${url.slice(0, 120)}`);
+  if (!res.ok) {
+    // Reads and label-modifies are idempotent: absorb transient 429/5xx with
+    // backoff (honoring Retry-After) instead of surfacing them
+    const method = (init.method ?? 'GET').toUpperCase();
+    const idempotent = method === 'GET' || url.includes('/modify');
+    if (idempotent && RETRYABLE_STATUS.has(res.status) && attempt < 3) {
+      const retryAfterMs = Number(res.headers.get('retry-after')) * 1000 || 0;
+      const delay = Math.max(retryAfterMs, 500 * 3 ** attempt) + Math.random() * 250;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      return gmailFetch(accountId, url, init, attempt + 1);
+    }
+    await throwForResponse(res, `Gmail ${method} ${url.slice(0, 120)}`);
+  }
   return res;
 }
 
@@ -133,15 +148,22 @@ export const googleProvider: Provider = {
       nextPageToken?: string;
     };
     const ids = (body.messages ?? []).map((m) => m.id);
-    const metas = await Promise.all(
-      ids.map(async (id) => {
-        const r = await gmailFetch(
-          accountId,
-          `${API}/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=Date`,
-        );
-        return (await r.json()) as GmailMessageMeta;
-      }),
-    );
+    // Bounded concurrency: Gmail caps concurrent requests per user, and an
+    // unbounded Promise.all over a 50-message page trips 429s
+    const CONCURRENCY = 5;
+    const metas: GmailMessageMeta[] = [];
+    for (let i = 0; i < ids.length; i += CONCURRENCY) {
+      const chunk = await Promise.all(
+        ids.slice(i, i + CONCURRENCY).map(async (id) => {
+          const r = await gmailFetch(
+            accountId,
+            `${API}/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=Date`,
+          );
+          return (await r.json()) as GmailMessageMeta;
+        }),
+      );
+      metas.push(...chunk);
+    }
     return {
       messages: metas.map(toSummary),
       nextPageToken: body.nextPageToken ?? null,

@@ -28,17 +28,32 @@ function assertGraphUrl(url: string): string {
   return url;
 }
 
+const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+
 async function graphFetch(
   accountId: string,
   url: string,
   init: RequestInit = {},
+  attempt = 0,
 ): Promise<Response> {
   const token = await getAccessToken(accountId);
   const res = await fetch(url, {
     ...init,
     headers: { Authorization: `Bearer ${token}`, ...(init.headers ?? {}) },
   });
-  if (!res.ok) await throwForResponse(res, `Graph ${init.method ?? 'GET'} ${url.slice(0, 120)}`);
+  if (!res.ok) {
+    // GET/PATCH/move are idempotent; absorb transient throttling with backoff
+    // (Graph sends Retry-After on 429/503)
+    const method = (init.method ?? 'GET').toUpperCase();
+    const idempotent = method === 'GET' || method === 'PATCH' || url.endsWith('/move');
+    if (idempotent && RETRYABLE_STATUS.has(res.status) && attempt < 3) {
+      const retryAfterMs = Number(res.headers.get('retry-after')) * 1000 || 0;
+      const delay = Math.max(retryAfterMs, 500 * 3 ** attempt) + Math.random() * 250;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      return graphFetch(accountId, url, init, attempt + 1);
+    }
+    await throwForResponse(res, `Graph ${method} ${url.slice(0, 120)}`);
+  }
   return res;
 }
 

@@ -7,6 +7,7 @@ import { db, sqlite, schema } from '../db/index.js';
 import { providerFor } from '../providers/index.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
+import { logActivity } from '../observability/activity.js';
 import type { Account, ImapMessage } from '../db/schema.js';
 
 // Emits ('indexed', accountId) whenever new messages land — IMAP IDLE hooks this.
@@ -105,6 +106,8 @@ export async function backfillAccount(account: Account): Promise<void> {
   if (state?.imapBackfilled) return;
   if (config.IMAP_BACKFILL_COUNT > 0) {
     const provider = providerFor(account.provider);
+    let indexed = 0;
+    let failures = 0;
     try {
       const { messages } = await provider.listMessages(account.id, {
         limit: config.IMAP_BACKFILL_COUNT,
@@ -114,8 +117,9 @@ export async function backfillAccount(account: Account): Promise<void> {
         try {
           const raw = await provider.getMessageRaw(account.id, summary.id);
           const parsed = await simpleParser(raw);
-          indexMessage(account.id, summary.id, raw, parsed);
+          if (indexMessage(account.id, summary.id, raw, parsed)) indexed++;
         } catch (err) {
+          failures++;
           logger.warn(
             { account: account.email, messageId: summary.id, err: String(err) },
             'imap backfill: failed to index message',
@@ -123,8 +127,26 @@ export async function backfillAccount(account: Account): Promise<void> {
         }
       }
       logger.info({ account: account.email, count: messages.length }, 'imap backfill complete');
+      logActivity({
+        category: 'imap',
+        action: 'backfill',
+        status: failures > 0 ? 'failed' : 'ok',
+        accountId: account.id,
+        detail: `indexed=${indexed} of ${messages.length}${failures ? `, ${failures} message(s) skipped` : ''}`,
+        error: failures > 0 ? `${failures} message(s) could not be fetched` : undefined,
+      });
     } catch (err) {
+      // The whole listing failed (e.g. rate-limited) — do NOT mark backfilled;
+      // the next SELECT retries. Surface it on the activity page.
       logger.warn({ account: account.email, err: String(err) }, 'imap backfill failed');
+      logActivity({
+        category: 'imap',
+        action: 'backfill',
+        status: 'failed',
+        accountId: account.id,
+        detail: 'will retry on next mailbox open',
+        error: String(err),
+      });
       return; // retry on next SELECT
     }
   }
