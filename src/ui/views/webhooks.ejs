@@ -1,0 +1,53 @@
+<%- include('_header') %>
+<h1>Webhooks</h1>
+<p class="muted">Registered URLs receive a signed POST (<code>X-EmailProxy-Signature: sha256=HMAC(secret, body)</code>) for every new inbound message.</p>
+<div class="card">
+  <form method="post" action="/ui/webhooks" class="row">
+    <input type="hidden" name="_csrf" value="<%= csrf %>">
+    <input name="url" placeholder="https://example.com/hooks/email" style="flex:2">
+    <select name="accountId">
+      <option value="">All accounts</option>
+      <% for (const a of accounts) { %><option value="<%= a.id %>"><%= a.email %></option><% } %>
+    </select>
+    <button type="submit">Add webhook</button>
+  </form>
+</div>
+<div class="card">
+  <% if (hooks.length === 0) { %><p class="muted">No webhooks yet.</p><% } else { %>
+  <table>
+    <tr><th>URL</th><th>Scope</th><th>Secret</th><th></th></tr>
+    <% for (const w of hooks) { %>
+    <tr>
+      <td class="mono"><%= w.url %></td>
+      <td class="muted"><%= w.accountId ? (accounts.find(a => a.id === w.accountId)?.email ?? w.accountId) : 'all accounts' %></td>
+      <td><code><%= w.secret %></code></td>
+      <td>
+        <form class="inline" method="post" action="/ui/webhooks/<%= w.id %>/delete">
+          <input type="hidden" name="_csrf" value="<%= csrf %>">
+          <button class="danger" type="submit">Delete</button>
+        </form>
+      </td>
+    </tr>
+    <% } %>
+  </table>
+  <% } %>
+</div>
+<h2>Recent deliveries</h2>
+<div class="card">
+  <% if (deliveries.length === 0) { %><p class="muted">No deliveries yet.</p><% } else { %>
+  <table>
+    <tr><th>When</th><th>Event</th><th>Status</th><th>Attempts</th><th>Response</th><th>Error</th></tr>
+    <% for (const d of deliveries) { %>
+    <tr>
+      <td class="muted"><%= new Date(d.createdAt).toLocaleString() %></td>
+      <td><%= d.event %></td>
+      <td><span class="badge <%= d.status %>"><%= d.status %></span></td>
+      <td class="muted"><%= d.attempts %></td>
+      <td class="muted"><%= d.responseStatus ?? '—' %></td>
+      <td class="muted"><%= d.lastError || '' %></td>
+    </tr>
+    <% } %>
+  </table>
+  <% } %>
+</div>
+<%- include('_footer') %>

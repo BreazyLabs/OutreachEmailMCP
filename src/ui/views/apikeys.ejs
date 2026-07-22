@@ -1,0 +1,51 @@
+<%- include('_header') %>
+<h1>API keys</h1>
+<% if (newKey) { %>
+<div class="alert success">Key "<%= newKey.name %>" created — copy it now, it is shown only once.</div>
+<div class="card"><div class="secret mono"><%= newKey.key %></div></div>
+<% } %>
+<div class="card">
+  <form method="post" action="/ui/apikeys">
+    <input type="hidden" name="_csrf" value="<%= csrf %>">
+    <div class="row" style="margin-bottom:0.7rem">
+      <input name="name" placeholder="Key name (e.g. crm-integration)" style="flex:1">
+      <button type="submit">Create API key</button>
+    </div>
+    <div class="row muted" style="gap:1rem">
+      Permissions:
+      <label><input type="checkbox" name="scopes" value="send" checked> send</label>
+      <label><input type="checkbox" name="scopes" value="read" checked> read</label>
+      <label><input type="checkbox" name="scopes" value="accounts" checked> accounts</label>
+      <label><input type="checkbox" name="scopes" value="webhooks" checked> webhooks</label>
+      <label><input type="checkbox" name="scopes" value="export" checked> export</label>
+    </div>
+  </form>
+</div>
+<div class="card">
+  <% const activeKeys = keys.filter(k => !k.revokedAt); %>
+  <% if (activeKeys.length === 0) { %><p class="muted">No API keys yet.</p><% } else { %>
+  <table>
+    <tr><th>Name</th><th>Key</th><th>Permissions</th><th>Created</th><th>Last used</th><th></th></tr>
+    <% for (const k of activeKeys) { %>
+    <tr>
+      <td><%= k.name %></td>
+      <td><code><%= k.keyPrefix %>…</code></td>
+      <td><% const s = JSON.parse(k.scopes); %><%= s.includes('*') ? 'all' : s.join(', ') %></td>
+      <td class="muted"><%= new Date(k.createdAt).toLocaleDateString() %></td>
+      <td class="muted"><%= k.lastUsedAt ? new Date(k.lastUsedAt).toLocaleString() : 'never' %></td>
+      <td>
+        <form class="inline" method="post" action="/ui/apikeys/<%= k.id %>/revoke">
+          <input type="hidden" name="_csrf" value="<%= csrf %>">
+          <button class="danger" type="submit">Revoke</button>
+        </form>
+      </td>
+    </tr>
+    <% } %>
+  </table>
+  <% } %>
+</div>
+<div class="card muted">
+  <p style="margin-top:0"><strong>REST:</strong> use keys as <code>Authorization: Bearer &lt;key&gt;</code> against <code>/api/v1/…</code>, e.g. <code>POST /api/v1/accounts/:accountId/messages</code>.</p>
+  <p style="margin-bottom:0"><strong>MCP:</strong> point AI agents at <code>POST /mcp</code> (Streamable HTTP) with the same Bearer key — tools are limited to the key's permissions. Example Claude config: <code>{"url": "<%= typeof baseUrl !== 'undefined' ? baseUrl : '' %>/mcp", "headers": {"Authorization": "Bearer &lt;key&gt;"}}</code></p>
+</div>
+<%- include('_footer') %>

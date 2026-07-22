@@ -1,0 +1,84 @@
+<%- include('_header') %>
+<h1><%= account.email %> <span class="badge <%= account.status %>"><%= account.status %></span></h1>
+<p class="muted">
+  <%= account.provider %> · account id <code><%= account.id %></code>
+  <% if (account.lastError) { %> · last error: <%= account.lastError %><% } %>
+</p>
+<% if (account.status === 'auth_error') { %>
+  <div class="alert error">
+    Authentication expired — <a href="/auth/<%= account.provider %>/start">reconnect this account</a>. Queued mail resumes automatically after reconnecting.
+  </div>
+<% } %>
+
+<h2>SMTP credentials</h2>
+<div class="card">
+  <p class="muted">
+    SMTP: <code><%= smtpHost %>:<%= smtpPort %></code> (STARTTLS) · IMAP: <code><%= smtpHost %>:<%= imapPort %></code> (STARTTLS) — same credentials for both.
+    MAIL FROM must be <code><%= account.email %></code>.
+  </p>
+  <% const active = credentials.filter(c => !c.revokedAt); %>
+  <% if (active.length > 0) { %>
+  <table>
+    <tr><th>Username</th><th>Password</th><th>Created</th><th>Last used</th><th></th></tr>
+    <% for (const c of active) { %>
+    <tr>
+      <td><code><%= c.username %></code></td>
+      <td><% if (c.password) { %><code class="reveal" title="hover to reveal"><%= c.password %></code><% } else { %><span class="muted">unavailable</span><% } %></td>
+      <td class="muted"><%= new Date(c.createdAt).toLocaleDateString() %></td>
+      <td class="muted"><%= c.lastUsedAt ? new Date(c.lastUsedAt).toLocaleString() : 'never' %></td>
+      <td>
+        <form class="inline" method="post" action="/ui/smtp-credentials/<%= c.id %>/revoke">
+          <input type="hidden" name="_csrf" value="<%= csrf %>">
+          <button class="danger" type="submit">Revoke</button>
+        </form>
+      </td>
+    </tr>
+    <% } %>
+  </table>
+  <% } %>
+  <form method="post" action="/ui/accounts/<%= account.id %>/smtp-credentials" style="margin-top:0.8rem">
+    <input type="hidden" name="_csrf" value="<%= csrf %>">
+    <button type="submit">Generate SMTP credential</button>
+  </form>
+</div>
+
+<h2>Inbound sync</h2>
+<div class="card">
+  <% if (sync) { %>
+    <p class="muted">
+      Last polled: <%= sync.lastPolledAt ? new Date(sync.lastPolledAt).toLocaleString() : 'not yet' %>
+      <% if (sync.lastError) { %> · <span style="color:var(--err)">error: <%= sync.lastError %></span><% } %>
+    </p>
+  <% } else { %>
+    <p class="muted">Cursor not anchored yet — will initialize on the next poll tick.</p>
+  <% } %>
+</div>
+
+<h2>Recent sends</h2>
+<div class="card">
+  <% if (jobs.length === 0) { %><p class="muted">Nothing sent yet.</p><% } else { %>
+  <table>
+    <tr><th>When</th><th>To</th><th>Subject</th><th>Source</th><th>Status</th><th>Error</th></tr>
+    <% for (const j of jobs) { %>
+    <tr>
+      <td class="muted"><%= new Date(j.createdAt).toLocaleString() %></td>
+      <td><%= j.envelope.to.join(', ') %></td>
+      <td><%= j.subject || '—' %></td>
+      <td class="muted"><%= j.source %></td>
+      <td><span class="badge <%= j.status %>"><%= j.status %></span></td>
+      <td class="muted"><%= j.lastError || '' %></td>
+    </tr>
+    <% } %>
+  </table>
+  <% } %>
+</div>
+
+<h2>Danger zone</h2>
+<div class="card">
+  <form method="post" action="/ui/accounts/<%= account.id %>/delete"
+        onsubmit="return confirm('Disconnect <%= account.email %>? This deletes its tokens, SMTP credentials and send history.')">
+    <input type="hidden" name="_csrf" value="<%= csrf %>">
+    <button class="danger" type="submit">Disconnect account</button>
+  </form>
+</div>
+<%- include('_footer') %>

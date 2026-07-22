@@ -1,0 +1,29 @@
+<%- include('_header') %>
+<h1>Billing</h1>
+<div class="card">
+  <p>Workspace <strong><%= org.name %></strong> is on the
+    <span class="badge <%= org.plan === 'pro' ? 'active' : 'queued' %>"><%= org.plan %></span> plan.</p>
+  <table>
+    <tr><th>Usage</th><th>Current</th><th>Limit</th></tr>
+    <tr><td>Connected accounts</td><td><%= usage.accounts %></td><td><%= usage.maxAccounts %></td></tr>
+    <tr><td>Sends (last 24h)</td><td><%= usage.sends24h %></td><td><%= usage.dailySends %></td></tr>
+  </table>
+</div>
+<% if (stripeEnabled) { %>
+<div class="card">
+  <% if (org.plan === 'free') { %>
+  <form method="post" action="/ui/billing/checkout">
+    <input type="hidden" name="_csrf" value="<%= csrf %>">
+    <button type="submit">Upgrade to Pro</button>
+  </form>
+  <% } else if (org.stripeCustomerId) { %>
+  <form method="post" action="/ui/billing/portal">
+    <input type="hidden" name="_csrf" value="<%= csrf %>">
+    <button class="secondary" type="submit">Manage subscription</button>
+  </form>
+  <% } %>
+</div>
+<% } else { %>
+<p class="muted">Billing is not configured on this instance.</p>
+<% } %>
+<%- include('_footer') %>

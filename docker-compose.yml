@@ -1,0 +1,46 @@
+services:
+  outreachemailmcp:
+    build: .
+    restart: unless-stopped
+    ports:
+      # HTTP (UI + REST + MCP). On Dokploy: attach a domain to container port
+      # 3000 instead (Traefik handles TLS) and DELETE this mapping to avoid
+      # host-port conflicts.
+      - "3000:3000"
+      # SMTP + IMAP are raw TCP — these must stay host-published (a reverse
+      # proxy like Traefik does not route them by default).
+      - "2525:2525"
+      - "1143:1143"
+    environment:
+      MASTER_KEY: ${MASTER_KEY:?Set MASTER_KEY (openssl rand -base64 32)}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD}
+      BASE_URL: ${BASE_URL:-http://localhost:3000}
+      HTTP_BIND: 0.0.0.0
+      SMTP_BIND: 0.0.0.0
+      IMAP_BIND: 0.0.0.0
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      MICROSOFT_CLIENT_ID: ${MICROSOFT_CLIENT_ID:-}
+      MICROSOFT_CLIENT_SECRET: ${MICROSOFT_CLIENT_SECRET:-}
+      MICROSOFT_TENANT: ${MICROSOFT_TENANT:-common}
+      POLL_INTERVAL: ${POLL_INTERVAL:-60}
+      SAAS_MODE: ${SAAS_MODE:-false}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      STRIPE_PRICE_PRO: ${STRIPE_PRICE_PRO:-}
+      SMTP_TLS_CERT: ${SMTP_TLS_CERT:-}
+      SMTP_TLS_KEY: ${SMTP_TLS_KEY:-}
+    volumes:
+      # Everything lives here: SQLite DB (accounts, encrypted tokens, queue),
+      # message spool, TLS certs. Back this volume up.
+      # On Dokploy you may prefer a bind mount into its managed files dir:
+      #   - ../files/data:/data
+      - outreachemailmcp-data:/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  outreachemailmcp-data:

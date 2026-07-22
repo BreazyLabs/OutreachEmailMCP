@@ -1,0 +1,1 @@
+ALTER TABLE `imap_messages` ADD `local_path` text;

@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OutreachEmailMCP — free open-source email gateway for sequencers, agents & legacy tools</title>
+<meta name="description" content="Connect Gmail and Microsoft 365 mailboxes once via OAuth, then use them from any email sequencer (Instantly, Smartlead, Lemlist…), any AI agent via MCP, or anything that speaks SMTP/IMAP. Free and open source.">
+<style>
+  :root { color-scheme: light dark; --fg:#16161f; --bg:#fafafa; --card:#fff; --line:#e4e4ec; --accent:#3b5bdb; --accent2:#7048e8; --muted:#6b7280; }
+  @media (prefers-color-scheme: dark) { :root { --fg:#e7e7ee; --bg:#0e0e13; --card:#17171f; --line:#28283a; --muted:#9ca3af; } }
+  * { box-sizing:border-box; margin:0; }
+  body { font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:var(--bg); color:var(--fg); line-height:1.6; }
+  .wrap { max-width:960px; margin:0 auto; padding:0 1.5rem; }
+  nav { display:flex; align-items:center; gap:1rem; padding:1.1rem 0; }
+  nav .brand { font-weight:800; font-size:1.1rem; }
+  nav .spacer { flex:1; }
+  a.btn { background:var(--accent); color:#fff; padding:0.55rem 1.15rem; border-radius:8px; text-decoration:none; font-weight:600; font-size:0.92rem; display:inline-block; }
+  a.btn.ghost { background:transparent; color:var(--fg); border:1px solid var(--line); }
+  a.btn.big { padding:0.8rem 1.6rem; font-size:1rem; }
+  .hero { text-align:center; padding:4.5rem 0 3rem; }
+  .hero h1 { font-size:2.6rem; line-height:1.15; letter-spacing:-0.02em; max-width:780px; margin:0 auto 1.2rem; }
+  .hero h1 em { font-style:normal; background:linear-gradient(90deg, var(--accent), var(--accent2)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .hero p.sub { font-size:1.15rem; color:var(--muted); max-width:640px; margin:0 auto 2rem; }
+  .free { display:inline-block; background:color-mix(in srgb, #12b76a 14%, transparent); color:#12b76a; font-weight:700; border-radius:99px; padding:0.25rem 0.9rem; font-size:0.85rem; margin-bottom:1.4rem; }
+  .diagram { font-family:ui-monospace, Menlo, monospace; font-size:0.78rem; line-height:1.5; color:var(--muted); background:var(--card); border:1px solid var(--line); border-radius:12px; padding:1.2rem 1.5rem; overflow-x:auto; white-space:pre; text-align:left; width:fit-content; max-width:100%; margin:2.5rem auto 0; }
+  section { padding:2.6rem 0; }
+  section h2 { font-size:1.5rem; margin-bottom:1.2rem; letter-spacing:-0.01em; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:1rem; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:1.3rem 1.4rem; }
+  .card h3 { font-size:1.02rem; margin-bottom:0.5rem; }
+  .card p { font-size:0.92rem; color:var(--muted); }
+  .step { display:flex; gap:1rem; align-items:flex-start; margin-bottom:1.1rem; }
+  .step .n { background:var(--accent); color:#fff; font-weight:700; min-width:1.8rem; height:1.8rem; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:0.9rem; }
+  .logos { display:flex; flex-wrap:wrap; gap:0.6rem; margin-top:0.8rem; }
+  .logos span { border:1px solid var(--line); background:var(--card); border-radius:99px; padding:0.3rem 0.9rem; font-size:0.85rem; color:var(--muted); }
+  footer { border-top:1px solid var(--line); padding:2rem 0; margin-top:3rem; color:var(--muted); font-size:0.88rem; display:flex; gap:1.5rem; flex-wrap:wrap; }
+  code { font-family:ui-monospace, Menlo, monospace; font-size:0.85em; background:color-mix(in srgb, var(--accent) 8%, transparent); border-radius:5px; padding:0.1rem 0.4rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav>
+    <span class="brand">📧 OutreachEmailMCP</span>
+    <span class="spacer"></span>
+    <a class="btn ghost" href="/ui/login">Log in</a>
+    <% if (saasMode) { %><a class="btn" href="/ui/signup">Get started free</a><% } else { %><a class="btn" href="/ui">Open dashboard</a><% } %>
+  </nav>
+
+  <div class="hero">
+    <div class="free">100% free · open source (AGPL)</div>
+    <h1>Your mailboxes, usable <em>everywhere</em> — sequencers, AI agents, and anything that speaks email</h1>
+    <p class="sub">Connect Gmail and Microsoft 365 accounts once via OAuth. OutreachEmailMCP then exposes them through SMTP, IMAP, a REST API, and MCP — so your outreach tools, scripts, and AI agents can send and read mail without ever touching provider passwords or OAuth themselves.</p>
+    <% if (saasMode) { %>
+      <a class="btn big" href="/ui/signup">Create your workspace →</a>
+    <% } else { %>
+      <a class="btn big" href="/ui">Open the dashboard →</a>
+    <% } %>
+    <div class="diagram">Instantly / Smartlead / …   ──SMTP + IMAP──▶  ┌──────────────────┐
+AI agents (Claude, MCP)     ──────MCP──────▶  │ OutreachEmailMCP │ ──OAuth API──▶  Gmail
+Your scripts &amp; apps         ─REST+webhooks─▶  │   one gateway    │ ──OAuth API──▶  Microsoft 365
+                                              └──────────────────┘</div>
+  </div>
+
+  <section>
+    <h2>How it works</h2>
+    <div class="step"><div class="n">1</div><div><strong>Connect mailboxes.</strong> Click Connect (or share a signed connect-link — no login needed) and approve the Google/Microsoft OAuth consent. Tokens are encrypted at rest and refreshed automatically; you never handle app passwords.</div></div>
+    <div class="step"><div class="n">2</div><div><strong>The gateway does the plumbing.</strong> Every mailbox gets proxy-local SMTP/IMAP credentials. Outbound mail goes through a crash-safe queue and out via the provider's own API (works even where SMTP AUTH is disabled); inbound mail is indexed and served over IMAP, REST, and signed webhooks.</div></div>
+    <div class="step"><div class="n">3</div><div><strong>Plug anything in.</strong> Export a ready-made CSV for your sequencer, point an AI agent at the <code>/mcp</code> endpoint with a permission-scoped API key, or use plain SMTP/IMAP/REST from any tool ever written.</div></div>
+  </section>
+
+  <section>
+    <h2>Why a gateway?</h2>
+    <div class="grid">
+      <div class="card"><h3>Providers killed passwords</h3><p>Google and Microsoft removed basic authentication — the username+password login every sequencer and legacy tool depends on. OutreachEmailMCP restores that interface locally while speaking modern OAuth to the providers, so nothing breaks and nothing violates their auth requirements.</p></div>
+      <div class="card"><h3>Sequencers AND direct access</h3><p>One connection serves both worlds: bulk-import your accounts into Instantly, Smartlead, Lemlist and friends via CSV — and simultaneously read replies or send from your own code, no double setup.</p></div>
+      <div class="card"><h3>Built for AI agents</h3><p>The MCP endpoint gives agents typed tools — list accounts, send email, read inboxes, check delivery status — behind API keys with granular permissions (send-only keys, read-only keys). Your agent never sees a mailbox credential.</p></div>
+      <div class="card"><h3>Reliability included</h3><p>Persistent send queue with retries and backoff, per-message delivery log, automatic token refresh, accounts pause (never lose mail) when re-authentication is needed.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Who it's for</h2>
+    <div class="grid">
+      <div class="card"><h3>Outreach &amp; growth teams</h3><p>Manage dozens of sending mailboxes and move them between sequencers with a CSV export instead of re-doing OAuth in every tool.</p></div>
+      <div class="card"><h3>Developers &amp; agencies</h3><p>One REST/webhook API for sending and reading across Gmail and Microsoft, self-hosted next to your stack in a single Docker container.</p></div>
+      <div class="card"><h3>AI builders</h3><p>Give agents safe, scoped email abilities over MCP without embedding provider OAuth flows into every project.</p></div>
+    </div>
+    <h2 style="margin-top:2.4rem">Works with</h2>
+    <div class="logos"><span>Instantly</span><span>Smartlead</span><span>Lemlist</span><span>Reply.io</span><span>Woodpecker</span><span>Claude / MCP clients</span><span>Anything with SMTP or IMAP</span></div>
+  </section>
+
+  <section style="text-align:center">
+    <h2>Completely free</h2>
+    <p style="max-width:560px; margin:0 auto 1.6rem; color:var(--muted)">OutreachEmailMCP is free to use and AGPL-licensed open source — self-host it with one <code>docker compose up</code>, inspect every line, or use this hosted instance at no cost.</p>
+    <% if (saasMode) { %><a class="btn big" href="/ui/signup">Get started free →</a><% } else { %><a class="btn big" href="/ui">Open the dashboard →</a><% } %>
+  </section>
+
+  <footer>
+    <span>📧 OutreachEmailMCP</span>
+    <span>AGPL-3.0 open source</span>
+    <a href="/ui/login" style="color:var(--muted)">Log in</a>
+  </footer>
+</div>
+</body>
+</html>

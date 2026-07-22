@@ -1,0 +1,22 @@
+<%- include('_header') %>
+<div class="auth-wrap">
+  <div class="auth-card">
+    <p class="auth-brand">📧 OutreachEmailMCP</p>
+    <p class="auth-sub">Create your workspace — free forever</p>
+    <form method="post" action="/ui/signup">
+      <label for="org">Workspace name <span style="text-transform:none; font-weight:400">(optional)</span></label>
+      <input id="org" name="org" placeholder="Acme Outreach">
+      <label for="email">Email</label>
+      <input id="email" type="email" name="email" autocomplete="email" autofocus>
+      <label for="password">Password</label>
+      <input id="password" type="password" name="password" autocomplete="new-password" placeholder="At least 10 characters">
+      <button type="submit">Create workspace</button>
+    </form>
+    <% if (typeof ssoEnabled !== 'undefined' && ssoEnabled) { %>
+      <div class="divider">or</div>
+      <%- include('_google-btn') %>
+    <% } %>
+    <p class="auth-alt">Already have a workspace? <a href="/ui/login">Log in</a></p>
+  </div>
+</div>
+<%- include('_footer') %>

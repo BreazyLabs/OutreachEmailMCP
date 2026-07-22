@@ -1,0 +1,53 @@
+{
+  "name": "outreachemailmcp",
+  "version": "0.1.0",
+  "description": "Free self-hosted email gateway: connect Gmail/Microsoft 365 via OAuth and expose them over SMTP, IMAP, REST and MCP - for sequencers, agents and legacy tools",
+  "type": "module",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "create-api-key": "tsx src/cli/create-api-key.ts",
+    "create-smtp-credential": "tsx src/cli/create-smtp-credential.ts",
+    "pretest": "rm -rf data-test",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^10.0.1",
+    "@fastify/formbody": "^8.0.1",
+    "@fastify/view": "^10.0.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "better-sqlite3": "^11.7.0",
+    "drizzle-orm": "^0.38.2",
+    "ejs": "^3.1.10",
+    "fastify": "^5.2.0",
+    "mailparser": "^3.7.2",
+    "nanoid": "^5.0.9",
+    "nodemailer": "^6.9.16",
+    "pino": "^9.5.0",
+    "selfsigned": "^2.4.1",
+    "smtp-server": "^3.13.6",
+    "tsx": "^4.19.2",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/ejs": "^3.1.5",
+    "@types/mailparser": "^3.4.5",
+    "@types/node": "^22.10.2",
+    "@types/nodemailer": "^6.4.17",
+    "@types/smtp-server": "^3.5.10",
+    "drizzle-kit": "^0.30.1",
+    "imapflow": "^1.4.7",
+    "pino-pretty": "^13.0.0",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

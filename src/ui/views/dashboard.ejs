@@ -1,0 +1,83 @@
+<%- include('_header') %>
+<h1>Connected accounts</h1>
+<div class="row">
+  <% if (googleEnabled) { %><a class="btn" href="/auth/google/start">+ Connect Gmail</a><% } %>
+  <% if (microsoftEnabled) { %><a class="btn" href="/auth/microsoft/start">+ Connect Microsoft</a><% } %>
+  <% if (!googleEnabled && !microsoftEnabled) { %>
+    <span class="muted">No OAuth providers configured — set GOOGLE_CLIENT_ID/SECRET or MICROSOFT_CLIENT_ID/SECRET in .env</span>
+  <% } %>
+</div>
+<% if (connectLinks.google || connectLinks.microsoft) { %>
+<div class="card">
+  <p class="muted" style="margin-top:0">Direct connect links (no admin login needed — share with users or automations; valid 7 days):</p>
+  <% if (connectLinks.google) { %>
+  <div class="row" style="margin-bottom:0.4rem">
+    <span style="min-width:75px">Gmail</span>
+    <input class="mono" readonly value="<%= connectLinks.google %>" onclick="this.select()" style="flex:1">
+  </div>
+  <% } %>
+  <% if (connectLinks.microsoft) { %>
+  <div class="row">
+    <span style="min-width:75px">Microsoft</span>
+    <input class="mono" readonly value="<%= connectLinks.microsoft %>" onclick="this.select()" style="flex:1">
+  </div>
+  <% } %>
+</div>
+<% } %>
+
+<div class="card">
+  <% if (accounts.length === 0) { %>
+    <p class="muted">No accounts connected yet.</p>
+  <% } else { %>
+  <table>
+    <tr><th>Email</th><th>Provider</th><th>Status</th><th>Connected</th><th></th></tr>
+    <% for (const a of accounts) { %>
+    <tr>
+      <td><a href="/ui/accounts/<%= a.id %>"><%= a.email %></a></td>
+      <td><%= a.provider %></td>
+      <td>
+        <span class="badge <%= a.status %>"><%= a.status %></span>
+        <% if (a.status === 'auth_error') { %>
+          <a class="muted" href="/auth/<%= a.provider %>/start">reconnect</a>
+        <% } %>
+      </td>
+      <td class="muted"><%= new Date(a.createdAt).toLocaleDateString() %></td>
+      <td><a class="muted" href="/ui/accounts/<%= a.id %>">manage →</a></td>
+    </tr>
+    <% } %>
+  </table>
+  <% } %>
+</div>
+
+<% if (accounts.length > 0) { %>
+<h2>Connect to your sequencer</h2>
+<div class="card">
+  <p class="muted" style="margin-top:0">Download a bulk-import CSV with each account's proxy SMTP + IMAP credentials, pre-formatted for your tool:</p>
+  <div class="row">
+    <% for (const [format, label] of Object.entries(sequencers)) { %>
+      <a class="btn <%= format === 'generic' ? 'secondary' : '' %>" style="<%= format === 'generic' ? 'color:inherit' : '' %>" href="/ui/accounts.csv?format=<%= format %>">⬇ <%= label %></a>
+    <% } %>
+  </div>
+</div>
+<% } %>
+
+<h2>Recent sends</h2>
+<div class="card">
+  <% if (recentJobs.length === 0) { %>
+    <p class="muted">Nothing sent yet.</p>
+  <% } else { %>
+  <table>
+    <tr><th>When</th><th>Account</th><th>To</th><th>Subject</th><th>Status</th></tr>
+    <% for (const j of recentJobs) { %>
+    <tr>
+      <td class="muted"><%= new Date(j.createdAt).toLocaleString() %></td>
+      <td><%= j.accountEmail %></td>
+      <td><%= j.envelope.to.join(', ') %></td>
+      <td><%= j.subject || '—' %></td>
+      <td><span class="badge <%= j.status %>"><%= j.status %></span></td>
+    </tr>
+    <% } %>
+  </table>
+  <% } %>
+</div>
+<%- include('_footer') %>

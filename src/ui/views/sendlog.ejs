@@ -1,0 +1,22 @@
+<%- include('_header') %>
+<h1>Send log</h1>
+<div class="card">
+  <% if (jobs.length === 0) { %><p class="muted">Nothing sent yet.</p><% } else { %>
+  <table>
+    <tr><th>When</th><th>Account</th><th>To</th><th>Subject</th><th>Source</th><th>Status</th><th>Attempts</th><th>Error</th></tr>
+    <% for (const j of jobs) { %>
+    <tr>
+      <td class="muted"><%= new Date(j.createdAt).toLocaleString() %></td>
+      <td><%= j.accountEmail %></td>
+      <td><%= j.envelope.to.join(', ') %></td>
+      <td><%= j.subject || '—' %></td>
+      <td class="muted"><%= j.source %></td>
+      <td><span class="badge <%= j.status %>"><%= j.status %></span></td>
+      <td class="muted"><%= j.attempts %></td>
+      <td class="muted"><%= j.lastError || '' %></td>
+    </tr>
+    <% } %>
+  </table>
+  <% } %>
+</div>
+<%- include('_footer') %>
