@@ -206,8 +206,83 @@ export function distinctFolders(accountId: string): string[] {
   const rows = sqlite
     .prepare(`SELECT DISTINCT folder FROM imap_messages WHERE account_id = ?`)
     .all(accountId) as { folder: string }[];
-  const folders = new Set(['INBOX', 'Sent', ...rows.map((r) => r.folder)]);
+  const folders = new Set(['INBOX', 'Spam', 'Sent', ...rows.map((r) => r.folder)]);
   return [...folders];
+}
+
+export function accountGrantedScopes(accountId: string): string {
+  const row = db
+    .select({ scopes: schema.oauthTokens.scopes })
+    .from(schema.oauthTokens)
+    .where(eq(schema.oauthTokens.accountId, accountId))
+    .get();
+  return row?.scopes ?? '';
+}
+
+// Sync a provider-backed folder's index against upstream: index messages we
+// haven't seen, and (when we fetched the complete folder) drop rows for
+// messages that left it. Locally-stored (APPENDed) rows are never dropped.
+export async function syncProviderFolder(
+  account: Account,
+  folder: 'INBOX' | 'Spam' | 'Sent',
+  limit: number,
+): Promise<{ added: number; removed: number }> {
+  const provider = providerFor(account.provider);
+  const ids = await provider.listMessageIds(account.id, folder, limit);
+  const idSet = new Set(ids);
+  const existing = db
+    .select()
+    .from(schema.imapMessages)
+    .where(
+      and(eq(schema.imapMessages.accountId, account.id), eq(schema.imapMessages.folder, folder)),
+    )
+    .all();
+  const known = new Set(existing.map((m) => m.providerMessageId));
+
+  let added = 0;
+  // Oldest-first so UIDs ascend with age
+  for (const id of [...ids].reverse()) {
+    if (known.has(id)) continue;
+    try {
+      const raw = await provider.getMessageRaw(account.id, id);
+      const parsed = await simpleParser(raw);
+      if (indexMessage(account.id, id, raw, parsed, folder)) added++;
+    } catch (err) {
+      logger.warn(
+        { account: account.email, folder, messageId: id, err: String(err) },
+        'folder sync: failed to index message',
+      );
+    }
+  }
+
+  let removed = 0;
+  // Only reconcile removals when we saw the whole folder (partial listings
+  // would falsely evict older messages beyond the window)
+  if (ids.length < limit) {
+    for (const row of existing) {
+      if (row.localPath || idSet.has(row.providerMessageId)) continue;
+      db.delete(schema.imapMessages).where(eq(schema.imapMessages.id, row.id)).run();
+      removed++;
+    }
+  }
+  return { added, removed };
+}
+
+// Reflect an upstream move in the index: new folder, fresh UID there, and the
+// provider's replacement id when it reassigns ids (Graph does).
+export function recordMove(
+  row: ImapMessage,
+  toFolder: string,
+  newProviderMessageId: string | null,
+): void {
+  db.update(schema.imapMessages)
+    .set({
+      folder: toFolder,
+      uid: nextUid(row.accountId, toFolder),
+      providerMessageId: newProviderMessageId ?? row.providerMessageId,
+    })
+    .where(eq(schema.imapMessages.id, row.id))
+    .run();
 }
 
 export function uidValidity(account: Account): number {

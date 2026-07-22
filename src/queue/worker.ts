@@ -5,6 +5,7 @@ import { db, schema } from '../db/index.js';
 import { providerFor } from '../providers/index.js';
 import { AuthError, RetryableError } from '../providers/errors.js';
 import { logger } from '../logger.js';
+import { logActivity } from '../observability/activity.js';
 import type { SendJob } from '../db/schema.js';
 import {
   claimJobs,
@@ -42,6 +43,8 @@ async function processJob(job: SendJob): Promise<void> {
     markFailed(job.id, `Raw message file missing: ${String(err)}`);
     return;
   }
+  const envelope = JSON.parse(job.envelopeJson) as { to: string[] };
+  const jobDetail = `job=${job.id} attempt=${job.attempts + 1} to=${envelope.to.join(',')} subject=${job.subject ?? ''}`.slice(0, 400);
   try {
     const providerMessageId = await providerFor(account.provider).sendRaw(job.accountId, raw);
     markSent(job.id, providerMessageId);
@@ -49,17 +52,48 @@ async function processJob(job: SendJob): Promise<void> {
       { jobId: job.id, account: account.email, subject: job.subject },
       'message sent',
     );
+    logActivity({
+      category: 'delivery',
+      action: 'sent',
+      status: 'ok',
+      accountId: account.id,
+      detail: jobDetail,
+    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (err instanceof AuthError) {
       markAuthBlocked(job, message);
       logger.warn({ jobId: job.id, account: account.email }, 'send blocked on auth; account paused');
+      logActivity({
+        category: 'delivery',
+        action: 'auth-blocked',
+        status: 'failed',
+        accountId: account.id,
+        detail: jobDetail,
+        error: `Account paused pending reconnect: ${message}`,
+      });
     } else if (err instanceof RetryableError) {
       markRetry(job, message);
       logger.warn({ jobId: job.id, attempts: job.attempts + 1, err: message }, 'send failed; will retry');
+      logActivity({
+        category: 'delivery',
+        action: 'retry',
+        status: 'failed',
+        accountId: account.id,
+        detail: jobDetail,
+        error: message,
+      });
     } else {
       markFailed(job.id, message);
       logger.error({ jobId: job.id, err: message }, 'send failed permanently');
+      logActivity({
+        category: 'delivery',
+        action: 'permanent-failure',
+        status: 'failed',
+        accountId: account.id,
+        detail: jobDetail,
+        error: message,
+      });
     }
   }
 }

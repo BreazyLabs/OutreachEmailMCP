@@ -40,7 +40,7 @@ Or with Docker: `MASTER_KEY=... ADMIN_PASSWORD=... docker compose up -d`.
 3. Create an **OAuth client ID** of type **Web application** with redirect URI: `{BASE_URL}/auth/google/callback` (e.g. `http://localhost:3000/auth/google/callback`).
 4. Put the client ID/secret in `.env` as `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`.
 
-Scopes used: `gmail.send`, `gmail.readonly`, `openid email`.
+Scopes used: `gmail.send`, `gmail.modify`, `openid email` (`gmail.modify` enables warmup: moving mail out of Spam and syncing read/star state upstream).
 
 ### Microsoft (Outlook / Microsoft 365)
 
@@ -49,7 +49,9 @@ Scopes used: `gmail.send`, `gmail.readonly`, `openid email`.
 3. Create a **client secret** (Certificates & secrets).
 4. Put them in `.env` as `MICROSOFT_CLIENT_ID` / `MICROSOFT_CLIENT_SECRET`. Keep `MICROSOFT_TENANT=common` unless you want to lock it to one tenant.
 
-Scopes used: `Mail.Send`, `Mail.Read`, `User.Read`, `offline_access`.
+Scopes used: `Mail.Send`, `Mail.ReadWrite`, `User.Read`, `offline_access` (`Mail.ReadWrite` enables warmup folder moves and flag sync).
+
+> **Upgrading from a read-only install?** Accounts connected before the write scopes were added keep working for send/read, but warmup operations return an IMAP `NO` until the account is **reconnected** (account page shows a banner). Reconnecting re-runs consent with the new scope; credentials and history are kept.
 
 ## Connect links (automation-friendly onboarding)
 
@@ -98,13 +100,13 @@ Notes:
 
 The proxy runs an IMAP4rev1 server (default port **1143**, STARTTLS) so reply-detection tools can watch the mailbox without provider OAuth. It authenticates with the **same username/password as SMTP** — the CSV export includes matching `imap_*` columns.
 
-Supported: `LOGIN` / `AUTHENTICATE PLAIN`, `LIST`, `STATUS`, `SELECT`/`EXAMINE`, `APPEND` (e.g. saving sent copies — stored locally), `UID SEARCH` (ALL, SEEN/UNSEEN, ANSWERED, DELETED, FLAGGED, SINCE/BEFORE, UID, FROM/TO/SUBJECT, HEADER — including `HEADER In-Reply-To`), `FETCH`/`UID FETCH` (FLAGS, UID, RFC822.SIZE, INTERNALDATE, ENVELOPE, BODYSTRUCTURE, `BODY[]`/sections/parts/partials), `STORE` flags, `EXPUNGE`, `IDLE`.
+Supported: `LOGIN` / `AUTHENTICATE PLAIN`, `LIST`, `STATUS`, `SELECT`/`EXAMINE`, `APPEND` (e.g. saving sent copies — stored locally), `UID SEARCH` (ALL, SEEN/UNSEEN, ANSWERED, DELETED, FLAGGED, SINCE/BEFORE, UID, FROM/TO/SUBJECT, HEADER — including `HEADER In-Reply-To`), `FETCH`/`UID FETCH` (FLAGS, UID, RFC822.SIZE, INTERNALDATE, ENVELOPE, BODYSTRUCTURE, `BODY[]`/sections/parts/partials), `STORE` flags (synced upstream), **`MOVE`/`UID MOVE`** (synced upstream), `EXPUNGE`, `IDLE`.
 
 How it works and its limits:
 
-- **INBOX** is provider-backed, fed by the same poller that drives webhooks (a `SELECT`/`NOOP` also triggers an on-demand refresh). On first IMAP use, the most recent `IMAP_BACKFILL_COUNT` (default 50) messages are indexed. A **Sent** folder (and any other mailbox a client APPENDs to) exists in the proxy's local index only.
+- **INBOX, Spam and Sent are provider-backed.** INBOX is fed by the same poller that drives webhooks; Spam and Sent sync from the provider on every `SELECT`. This is what makes **sequencer warmup work**: warmup tools open Spam, find their messages, `MOVE` them to INBOX — and the proxy performs the move in the real mailbox (Gmail label change / Graph folder move). `STORE \Seen`/`\Flagged` likewise sync to real read/star state. Other mailbox names a client APPENDs to exist in the proxy's local index only.
 - Message **bodies are never stored** — they're fetched live from Gmail/Graph when a client asks, with UIDs and envelope metadata kept in a local index.
-- **Flags are proxy-local** (`\Seen`, `\Flagged`, …): marking read/deleted here never touches the real mailbox (the Gmail scope is read-only by design). `EXPUNGE` only removes messages from the proxy's index.
+- Upstream writes need the write scopes (`gmail.modify` / `Mail.ReadWrite`); accounts connected with older read-only grants get a clear `NO … reconnect` response and a UI banner. `EXPUNGE` stays proxy-local (nothing is ever deleted upstream).
 
 ## MCP (AI agents)
 
@@ -176,6 +178,7 @@ Verify the signature, then fetch the full body via the read API using `message.i
 - **Secrets**: OAuth tokens and SMTP passwords are AES-256-GCM-encrypted with `MASTER_KEY` (SMTP passwords stay readable for export/re-display); API keys are stored hashed and shown exactly once. Losing `MASTER_KEY` means reconnecting accounts and regenerating SMTP credentials.
 - **Exposure**: everything binds to `127.0.0.1` by default. To expose, set `HTTP_BIND`/`SMTP_BIND` to `0.0.0.0` and put the HTTP side behind a TLS reverse proxy (Caddy/nginx); set `BASE_URL` to the public https URL (it is also the OAuth redirect base).
 - **Account health**: if a refresh token is revoked, the account flips to `auth_error`, queued mail is held (not failed), and the UI shows a reconnect link. Sending resumes automatically after reconnecting.
+- **Transaction log**: every operation — SMTP/IMAP logins, submissions, each delivery attempt, warmup moves, flag syncs, poll runs, webhook deliveries, token refreshes — is recorded with pass/fail in the **Activity** page (`/ui/activity`, filterable by status/category, with a failures-last-24h counter) and via `GET /api/v1/activity?status=failed…`. Failures also go to the structured process log. Retention: `ACTIVITY_RETENTION_DAYS` (default 30).
 - **Data**: everything lives in `DATA_DIR` (default `./data`) — SQLite DB, raw `.eml` spool, TLS certs. Back that directory up.
 - **Spool retention**: the raw `.eml` of a message is only stored while it matters — as the queue payload before delivery, then for `SENT_RAW_RETENTION_HOURS` (default 24) after a successful send, after which it is deleted. The canonical sent copy lives in the provider's Sent folder (re-findable via `providerMessageId` for Gmail or the `messageId` header for Microsoft, both exposed in the send log). Failed/queued mail is never cleaned up — it's the only copy.
 

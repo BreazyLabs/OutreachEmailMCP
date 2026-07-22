@@ -6,6 +6,7 @@ import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { dispatchEvent } from './webhooks.js';
 import { indexMessage } from '../imap/index-store.js';
+import { logActivity } from '../observability/activity.js';
 import type { Account } from '../db/schema.js';
 
 async function pollAccount(account: Account): Promise<void> {
@@ -103,6 +104,13 @@ async function tick(): Promise<void> {
           .where(eq(schema.syncState.accountId, account.id))
           .run();
         logger.warn({ account: account.email, err: String(err) }, 'inbound poll failed');
+        logActivity({
+          category: 'poll',
+          action: 'inbox-poll',
+          status: 'failed',
+          accountId: account.id,
+          error: String(err),
+        });
       }
     }
   } finally {

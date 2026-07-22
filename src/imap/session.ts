@@ -20,10 +20,15 @@ import {
   uidValidity,
   indexMessage,
   distinctFolders,
+  syncProviderFolder,
+  recordMove,
+  accountGrantedScopes,
   imapIndexEvents,
   type FlagName,
   type CachedEnvelope,
 } from './index-store.js';
+import { logActivity } from '../observability/activity.js';
+import { PROVIDER_FOLDERS, type CanonicalFolder } from '../providers/types.js';
 import {
   parseMimeStructure,
   serializeBodyStructure,
@@ -60,6 +65,7 @@ export class ImapSession {
   private closed = false;
   private state: 'notauth' | 'auth' | 'selected' = 'notauth';
   private account: Account | null = null;
+  private canWrite = false;
   private folder = 'INBOX';
   private messages: ImapMessage[] = [];
   private readonly rawCache = new Map<string, Buffer>();
@@ -111,7 +117,7 @@ export class ImapSession {
   }
 
   private capabilities(): string {
-    const caps = ['IMAP4rev1', 'IDLE', 'LITERAL+'];
+    const caps = ['IMAP4rev1', 'IDLE', 'LITERAL+', 'MOVE'];
     if (!this.secure) caps.push('STARTTLS');
     if (this.secure || config.IMAP_ALLOW_INSECURE_AUTH) caps.push('AUTH=PLAIN');
     else caps.push('LOGINDISABLED');
@@ -253,6 +259,8 @@ export class ImapSession {
           return this.fetch(tag, atom(tokens[0]), tokens[1] ?? tokens.slice(1), uidMode);
         case 'STORE':
           return this.store(tag, atom(tokens[0]), atom(tokens[1]), tokens[2], uidMode);
+        case 'MOVE':
+          return this.move(tag, atom(tokens[0]), atom(tokens[1]), uidMode);
         case 'IDLE':
           if (this.state === 'notauth') return this.no(tag, 'Authenticate first');
           this.idleTag = tag;
@@ -299,9 +307,28 @@ export class ImapSession {
 
   private finishLogin(tag: string, username: string, password: string): void {
     const account = verifyProxyCredential(username, password);
-    if (!account) return this.no(tag, '[AUTHENTICATIONFAILED] Invalid credentials');
+    if (!account) {
+      logActivity({
+        category: 'imap',
+        action: 'auth',
+        status: 'failed',
+        detail: `username=${username.slice(0, 60)}`,
+        error: 'Invalid credentials',
+      });
+      return this.no(tag, '[AUTHENTICATIONFAILED] Invalid credentials');
+    }
     this.account = account;
+    this.canWrite = providerFor(account.provider).supportsWrite(
+      accountGrantedScopes(account.id),
+    );
     this.state = 'auth';
+    logActivity({
+      category: 'imap',
+      action: 'auth',
+      status: 'ok',
+      accountId: account.id,
+      detail: `username=${username}, upstreamWrite=${this.canWrite}`,
+    });
     this.write(`* CAPABILITY ${this.capabilities()}${CRLF}`);
     this.ok(tag, `${username} authenticated`);
   }
@@ -328,15 +355,56 @@ export class ImapSession {
 
   // --- mailbox commands ---
 
-  // INBOX is provider-backed; everything else (Sent, custom names) exists only
-  // in the local index, fed by APPEND.
+  // INBOX, Spam and Sent are provider-backed; other names exist only in the
+  // local index (fed by APPEND).
   private normalizeMailbox(name: string): string {
     const upper = name.toUpperCase();
     if (upper === 'INBOX') return 'INBOX';
+    if (
+      upper === 'SPAM' || upper === 'JUNK' || upper === 'JUNK EMAIL' ||
+      upper === '[GMAIL]/SPAM' || upper === 'JUNK E-MAIL'
+    ) {
+      return 'Spam';
+    }
     if (upper === 'SENT' || upper === 'SENT ITEMS' || upper === 'SENT MAIL' || upper === '[GMAIL]/SENT MAIL') {
       return 'Sent';
     }
     return name;
+  }
+
+  private isProviderFolder(folder: string): folder is CanonicalFolder {
+    return (PROVIDER_FOLDERS as string[]).includes(folder);
+  }
+
+  // Refresh a provider-backed folder's index from upstream, logging failures
+  // to the activity log but serving the (stale) local index on error.
+  private async syncFolder(folder: string): Promise<void> {
+    if (!this.account || !this.isProviderFolder(folder)) return;
+    try {
+      const { added, removed } = await syncProviderFolder(
+        this.account,
+        folder,
+        config.IMAP_BACKFILL_COUNT,
+      );
+      if (added > 0 || removed > 0) {
+        logActivity({
+          category: 'imap',
+          action: 'folder-sync',
+          status: 'ok',
+          accountId: this.account.id,
+          detail: `${folder}: +${added} -${removed}`,
+        });
+      }
+    } catch (err) {
+      logActivity({
+        category: 'imap',
+        action: 'folder-sync',
+        status: 'failed',
+        accountId: this.account.id,
+        detail: folder,
+        error: String(err),
+      });
+    }
   }
 
   private list(tag: string, command: string, pattern: string): void {
@@ -346,7 +414,12 @@ export class ImapSession {
       this.write(`* ${command} (\\Noselect) "/" ""${CRLF}`);
     } else {
       for (const folder of distinctFolders(this.account.id)) {
-        const attrs = folder === 'Sent' ? '\\HasNoChildren \\Sent' : '\\HasNoChildren';
+        const attrs =
+          folder === 'Sent'
+            ? '\\HasNoChildren \\Sent'
+            : folder === 'Spam'
+              ? '\\HasNoChildren \\Junk'
+              : '\\HasNoChildren';
         if (p === '*' || p === '%' || this.normalizeMailbox(pattern) === folder) {
           this.write(`* ${command} (${attrs}) "/" ${quoted(folder)}${CRLF}`);
         }
@@ -390,6 +463,8 @@ export class ImapSession {
       } catch (err) {
         logger.debug({ err: String(err) }, 'imap select refresh failed');
       }
+    } else if (this.isProviderFolder(this.folder)) {
+      await this.syncFolder(this.folder);
     }
     this.messages = messagesFor(this.account.id, this.folder);
     this.state = 'selected';
@@ -789,15 +864,81 @@ export class ImapSession {
     return raw.subarray(node.bodyStart, node.bodyEnd);
   }
 
+  // --- MOVE (warmup: pull messages out of Spam upstream) ---
+
+  private async move(
+    tag: string,
+    setSpec: string,
+    mailbox: string,
+    uidMode: boolean,
+  ): Promise<void> {
+    if (this.state !== 'selected' || !this.account) return this.bad(tag, 'Not selected');
+    const target = this.normalizeMailbox(mailbox);
+    const source = this.folder;
+    if (!this.isProviderFolder(source) || !this.isProviderFolder(target) || target === 'Sent') {
+      return this.no(tag, `MOVE is supported between INBOX and Spam`);
+    }
+    if (source === target) return this.ok(tag, 'MOVE completed');
+    if (!this.canWrite) {
+      return this.no(
+        tag,
+        'Upstream changes not permitted — reconnect this account to grant mailbox-write access',
+      );
+    }
+    const targets = this.resolveSet(setSpec, uidMode);
+    if (targets.length === 0) return this.ok(tag, 'MOVE completed');
+    const provider = providerFor(this.account.provider);
+    const moved: ImapMessage[] = [];
+    for (const msg of targets) {
+      if (msg.localPath) continue; // local-only rows have no upstream copy
+      try {
+        const newId = await provider.moveMessage(
+          this.account.id,
+          msg.providerMessageId,
+          source,
+          target,
+        );
+        recordMove(msg, target, newId);
+        moved.push(msg);
+        logActivity({
+          category: 'imap',
+          action: 'move',
+          status: 'ok',
+          accountId: this.account.id,
+          detail: `${source}→${target} uid=${msg.uid} subject=${(JSON.parse(msg.envelopeJson) as CachedEnvelope).subject ?? ''}`.slice(0, 300),
+        });
+      } catch (err) {
+        logActivity({
+          category: 'imap',
+          action: 'move',
+          status: 'failed',
+          accountId: this.account.id,
+          detail: `${source}→${target} uid=${msg.uid}`,
+          error: String(err),
+        });
+      }
+    }
+    // Report moved messages as expunged from the source, highest seq first
+    const movedIds = new Set(moved.map((m) => m.id));
+    for (let i = this.messages.length - 1; i >= 0; i--) {
+      if (movedIds.has(this.messages[i]!.id)) this.write(`* ${i + 1} EXPUNGE${CRLF}`);
+    }
+    this.messages = this.messages.filter((m) => !movedIds.has(m.id));
+    if (moved.length < targets.filter((t) => !t.localPath).length) {
+      return this.no(tag, 'MOVE completed with errors (see activity log)');
+    }
+    return this.ok(tag, 'MOVE completed');
+  }
+
   // --- STORE ---
 
-  private store(
+  private async store(
     tag: string,
     setSpec: string,
     operation: string,
     flagsToken: Token | undefined,
     uidMode: boolean,
-  ): void {
+  ): Promise<void> {
     if (this.state !== 'selected') return this.bad(tag, 'Not selected');
     const op = operation.toUpperCase();
     const match = op.match(/^([+-]?)FLAGS(\.SILENT)?$/);
@@ -814,6 +955,12 @@ export class ImapSession {
       );
       if (name) known.push(name);
     }
+    // Upstream sync of \Seen and \Flagged (warmup marks messages read/starred)
+    // for provider-backed folders when the account grants write access.
+    const syncUpstream =
+      this.canWrite &&
+      this.isProviderFolder(this.folder) &&
+      known.some((k) => k === 'Seen' || k === 'Flagged');
     for (const msg of this.resolveSet(setSpec, uidMode)) {
       applyFlags(msg.id, known, mode);
       const updated = db
@@ -826,6 +973,31 @@ export class ImapSession {
         if (!silent) {
           const uidPart = uidMode ? `UID ${msg.uid} ` : '';
           this.write(`* ${this.seqOf(msg)} FETCH (${uidPart}FLAGS (${flagsOf(msg).join(' ')}))${CRLF}`);
+        }
+        if (syncUpstream && !msg.localPath && this.account) {
+          const wants: { seen?: boolean; flagged?: boolean } = {};
+          if (known.includes('Seen')) wants.seen = mode !== 'remove';
+          if (known.includes('Flagged')) wants.flagged = mode !== 'remove';
+          if (mode === 'set') {
+            wants.seen = known.includes('Seen');
+            wants.flagged = known.includes('Flagged');
+          }
+          try {
+            await providerFor(this.account.provider).setMessageFlags(
+              this.account.id,
+              msg.providerMessageId,
+              wants,
+            );
+          } catch (err) {
+            logActivity({
+              category: 'imap',
+              action: 'flags',
+              status: 'failed',
+              accountId: this.account.id,
+              detail: `uid=${msg.uid} ${JSON.stringify(wants)}`,
+              error: String(err),
+            });
+          }
         }
       }
     }

@@ -4,6 +4,7 @@ import { encryptSecret, decryptSecret } from '../crypto/secrets.js';
 import { refreshTokenGrant, type ProviderName, type TokenSet } from '../providers/oauth.js';
 import { AuthError } from '../providers/errors.js';
 import { logger } from '../logger.js';
+import { logActivity } from '../observability/activity.js';
 
 const REFRESH_MARGIN_MS = 120_000;
 
@@ -96,6 +97,13 @@ async function getAccessTokenInner(accountId: string): Promise<string> {
         { accountId, email: account.email, err: err.message },
         'token refresh failed; account needs reconnect',
       );
+      logActivity({
+        category: 'oauth',
+        action: 'token-refresh',
+        status: 'failed',
+        accountId,
+        error: `Account paused — reconnect required: ${err.message}`,
+      });
     }
     throw err;
   }

@@ -9,6 +9,7 @@ import { decryptSecret } from '../crypto/secrets.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { backoffMs } from '../queue/sendQueue.js';
+import { logActivity } from '../observability/activity.js';
 import type { WebhookDelivery } from '../db/schema.js';
 
 const MAX_DELIVERY_ATTEMPTS = 6;
@@ -135,6 +136,14 @@ async function deliverOne(delivery: WebhookDelivery): Promise<void> {
   const fail = (error: string, responseStatus: number | null) => {
     const attempts = delivery.attempts + 1;
     const exhausted = attempts >= MAX_DELIVERY_ATTEMPTS;
+    logActivity({
+      category: 'webhook',
+      action: exhausted ? 'delivery-exhausted' : 'delivery-retry',
+      status: 'failed',
+      orgId: hook?.orgId,
+      detail: `webhook=${delivery.webhookId} url=${hook?.url ?? '?'} attempt=${attempts}`,
+      error,
+    });
     db.update(schema.webhookDeliveries)
       .set({
         status: exhausted ? 'failed' : 'pending',
@@ -177,6 +186,13 @@ async function deliverOne(delivery: WebhookDelivery): Promise<void> {
       signal: AbortSignal.timeout(10_000),
     });
     if (res.ok) {
+      logActivity({
+        category: 'webhook',
+        action: 'delivered',
+        status: 'ok',
+        orgId: hook.orgId,
+        detail: `webhook=${delivery.webhookId} url=${hook.url} status=${res.status}`,
+      });
       db.update(schema.webhookDeliveries)
         .set({
           status: 'delivered',

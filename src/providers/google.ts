@@ -7,7 +7,14 @@ import type {
   ListMessagesOptions,
   ListMessagesResult,
   PollResult,
+  CanonicalFolder,
 } from './types.js';
+
+const FOLDER_LABELS: Record<CanonicalFolder, string> = {
+  INBOX: 'INBOX',
+  Spam: 'SPAM',
+  Sent: 'SENT',
+};
 
 const API = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const UPLOAD_API = 'https://gmail.googleapis.com/upload/gmail/v1/users/me';
@@ -57,6 +64,45 @@ function toSummary(msg: GmailMessageMeta): MessageSummary {
 export const googleProvider: Provider = {
   // Gmail API media upload accepts up to 25 MB
   maxRawSize: 25 * 1024 * 1024,
+
+  supportsWrite(grantedScopes) {
+    return grantedScopes.includes('gmail.modify');
+  },
+
+  async listMessageIds(accountId, folder, limit) {
+    const params = new URLSearchParams({
+      labelIds: FOLDER_LABELS[folder],
+      maxResults: String(limit),
+    });
+    const res = await gmailFetch(accountId, `${API}/messages?${params}`);
+    const body = (await res.json()) as { messages?: { id: string }[] };
+    return (body.messages ?? []).map((m) => m.id);
+  },
+
+  async moveMessage(accountId, messageId, from, to) {
+    await gmailFetch(accountId, `${API}/messages/${messageId}/modify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        addLabelIds: [FOLDER_LABELS[to]],
+        removeLabelIds: [FOLDER_LABELS[from]],
+      }),
+    });
+    return null; // Gmail keeps the same id
+  },
+
+  async setMessageFlags(accountId, messageId, flags) {
+    const addLabelIds: string[] = [];
+    const removeLabelIds: string[] = [];
+    if (flags.seen !== undefined) (flags.seen ? removeLabelIds : addLabelIds).push('UNREAD');
+    if (flags.flagged !== undefined) (flags.flagged ? addLabelIds : removeLabelIds).push('STARRED');
+    if (addLabelIds.length === 0 && removeLabelIds.length === 0) return;
+    await gmailFetch(accountId, `${API}/messages/${messageId}/modify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ addLabelIds, removeLabelIds }),
+    });
+  },
 
   async sendRaw(accountId, raw) {
     const res = await gmailFetch(accountId, `${UPLOAD_API}/messages/send?uploadType=media`, {

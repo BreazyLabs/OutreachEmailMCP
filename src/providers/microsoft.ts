@@ -7,7 +7,15 @@ import type {
   ListMessagesOptions,
   ListMessagesResult,
   PollResult,
+  CanonicalFolder,
 } from './types.js';
+
+// Graph well-known folder names
+const FOLDER_IDS: Record<CanonicalFolder, string> = {
+  INBOX: 'inbox',
+  Spam: 'junkemail',
+  Sent: 'sentitems',
+};
 
 const GRAPH = 'https://graph.microsoft.com/v1.0';
 
@@ -73,6 +81,53 @@ export const microsoftProvider: Provider = {
   // inflation), so ~2.9 MB raw is the practical ceiling. Larger mail needs the
   // draft + attachment-upload-session flow, which is not implemented yet.
   maxRawSize: 2_900_000,
+
+  supportsWrite(grantedScopes) {
+    return grantedScopes.includes('Mail.ReadWrite');
+  },
+
+  async listMessageIds(accountId, folder, limit) {
+    const params = new URLSearchParams({
+      $top: String(limit),
+      $select: 'id',
+      $orderby: 'receivedDateTime desc',
+    });
+    const res = await graphFetch(
+      accountId,
+      `${GRAPH}/me/mailFolders/${FOLDER_IDS[folder]}/messages?${params}`,
+    );
+    const body = (await res.json()) as { value?: { id: string }[] };
+    return (body.value ?? []).map((m) => m.id);
+  },
+
+  async moveMessage(accountId, messageId, _from, to) {
+    const res = await graphFetch(
+      accountId,
+      `${GRAPH}/me/messages/${encodeURIComponent(messageId)}/move`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ destinationId: FOLDER_IDS[to] }),
+      },
+    );
+    // Graph assigns a NEW id to the moved message
+    const body = (await res.json()) as { id?: string };
+    return body.id ?? null;
+  },
+
+  async setMessageFlags(accountId, messageId, flags) {
+    const patch: Record<string, unknown> = {};
+    if (flags.seen !== undefined) patch.isRead = flags.seen;
+    if (flags.flagged !== undefined) {
+      patch.flag = { flagStatus: flags.flagged ? 'flagged' : 'notFlagged' };
+    }
+    if (Object.keys(patch).length === 0) return;
+    await graphFetch(accountId, `${GRAPH}/me/messages/${encodeURIComponent(messageId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+  },
 
   async sendRaw(accountId, raw) {
     await graphFetch(accountId, `${GRAPH}/me/sendMail`, {

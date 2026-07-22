@@ -1,0 +1,38 @@
+<%- include('_header') %>
+<h1>Activity</h1>
+<p class="muted">Every transaction — logins, submissions, delivery attempts, warmup moves, flag syncs, polls, webhooks, token refreshes — with pass/fail. Retained <%= retentionDays %> days.</p>
+<div class="card">
+  <form method="get" action="/ui/activity" class="row">
+    <select name="status">
+      <option value="">All statuses</option>
+      <option value="ok" <%= filters.status === 'ok' ? 'selected' : '' %>>ok</option>
+      <option value="failed" <%= filters.status === 'failed' ? 'selected' : '' %>>failed</option>
+    </select>
+    <select name="category">
+      <option value="">All categories</option>
+      <% for (const c of ['smtp','imap','api','mcp','delivery','poll','webhook','oauth']) { %>
+      <option value="<%= c %>" <%= filters.category === c ? 'selected' : '' %>><%= c %></option>
+      <% } %>
+    </select>
+    <button type="submit" class="secondary">Filter</button>
+    <span class="muted" style="margin-left:auto"><%= failedLast24h %> failures in the last 24h</span>
+  </form>
+</div>
+<div class="card">
+  <% if (rows.length === 0) { %><p class="muted">No activity recorded<%= filters.status || filters.category ? ' for this filter' : ' yet' %>.</p><% } else { %>
+  <table>
+    <tr><th>When</th><th>Account</th><th>Category</th><th>Action</th><th>Status</th><th>Detail</th></tr>
+    <% for (const r of rows) { %>
+    <tr>
+      <td class="muted" style="white-space:nowrap"><%= new Date(r.createdAt).toLocaleString() %></td>
+      <td><%= r.accountEmail || '—' %></td>
+      <td class="muted"><%= r.category %></td>
+      <td><%= r.action %></td>
+      <td><span class="badge <%= r.status === 'ok' ? 'sent' : 'failed' %>"><%= r.status %></span></td>
+      <td class="muted" style="max-width:420px; word-break:break-word"><%= r.detail || '' %><% if (r.error) { %><br><span style="color:var(--err)"><%= r.error %></span><% } %></td>
+    </tr>
+    <% } %>
+  </table>
+  <% } %>
+</div>
+<%- include('_footer') %>

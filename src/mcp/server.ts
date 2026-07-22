@@ -14,6 +14,7 @@ import { buildAccountsCsv, SEQUENCER_FORMATS } from '../export/accounts-csv.js';
 import { hasScope, type ApiScope } from '../api/plugin.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
+import { logActivity } from '../observability/activity.js';
 import { simpleParser } from 'mailparser';
 
 // MCP endpoint: POST /mcp with Authorization: Bearer <api key>. Stateless
@@ -254,6 +255,13 @@ export function buildMcpServer(auth: McpAuth): McpServer {
             to: [...toArray(input.to), ...toArray(input.cc), ...toArray(input.bcc)],
           },
           subject: input.subject || null,
+        });
+        logActivity({
+          category: 'mcp',
+          action: 'send',
+          status: 'ok',
+          accountId: account.id,
+          detail: `job=${job.id} to=${input.to.join(',')} subject=${input.subject}`.slice(0, 400),
         });
         return text({ jobId: job.id, status: job.status });
       },

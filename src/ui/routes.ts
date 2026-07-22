@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, gt } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { db, schema } from '../db/index.js';
 import { config } from '../config.js';
@@ -11,6 +11,7 @@ import { createSmtpCredential, smtpAdvertisedHost } from '../smtp/credentials.js
 import { buildAccountsCsv } from '../export/accounts-csv.js';
 import { createConnectLink } from '../auth/connect-links.js';
 import { publicJob } from '../api/send-log.js';
+import { providerFor } from '../providers/index.js';
 import { ALL_SCOPES } from '../api/plugin.js';
 import { SEQUENCER_LABELS } from '../export/accounts-csv.js';
 import { ssoEnabled } from '../auth/sso.js';
@@ -189,10 +190,17 @@ export function registerUiRoutes(app: FastifyInstance) {
       .from(schema.syncState)
       .where(eq(schema.syncState.accountId, account.id))
       .get();
+    const tokenRow = db
+      .select({ scopes: schema.oauthTokens.scopes })
+      .from(schema.oauthTokens)
+      .where(eq(schema.oauthTokens.accountId, account.id))
+      .get();
+    const warmupReady = providerFor(account.provider).supportsWrite(tokenRow?.scopes ?? '');
     return reply.view('account.ejs', {
       ...baseLocals(req, session),
       page: 'account',
       account,
+      warmupReady,
       credentials: credentials.map((c) => {
         let password: string | null = null;
         try {
@@ -470,6 +478,47 @@ export function registerUiRoutes(app: FastifyInstance) {
       })),
     });
   });
+
+  app.get<{ Querystring: { status?: string; category?: string } }>(
+    '/ui/activity',
+    async (req, reply) => {
+      const session = guard(req, reply);
+      if (!session) return;
+      const conditions = [eq(schema.activityLog.orgId, session.org.id)];
+      if (req.query.status === 'ok' || req.query.status === 'failed') {
+        conditions.push(eq(schema.activityLog.status, req.query.status));
+      }
+      if (req.query.category) {
+        conditions.push(eq(schema.activityLog.category, req.query.category));
+      }
+      const rows = db
+        .select()
+        .from(schema.activityLog)
+        .where(and(...conditions))
+        .orderBy(desc(schema.activityLog.createdAt))
+        .limit(200)
+        .all();
+      const failedLast24h = db
+        .select()
+        .from(schema.activityLog)
+        .where(
+          and(
+            eq(schema.activityLog.orgId, session.org.id),
+            eq(schema.activityLog.status, 'failed'),
+            gt(schema.activityLog.createdAt, Date.now() - 24 * 3600_000),
+          ),
+        )
+        .all().length;
+      return reply.view('activity.ejs', {
+        ...baseLocals(req, session),
+        page: 'activity',
+        rows,
+        failedLast24h,
+        retentionDays: config.ACTIVITY_RETENTION_DAYS,
+        filters: { status: req.query.status ?? '', category: req.query.category ?? '' },
+      });
+    },
+  );
 
   app.get('/ui/billing', async (req, reply) => {
     const session = guard(req, reply);

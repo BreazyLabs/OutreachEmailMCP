@@ -192,6 +192,30 @@ export const imapMessages = sqliteTable(
   ],
 );
 
+// Transaction log: one row per meaningful operation (auth, submit, delivery
+// attempt, warmup move, flag sync, poll failure, webhook attempt, token
+// refresh) with pass/fail — the "is something wrong?" audit surface.
+export const activityLog = sqliteTable(
+  'activity_log',
+  {
+    id: text('id').primaryKey(),
+    orgId: text('org_id').notNull().default('org_default'),
+    accountId: text('account_id'),
+    accountEmail: text('account_email'),
+    category: text('category').notNull(), // smtp|imap|api|mcp|delivery|poll|webhook|oauth
+    action: text('action').notNull(), // auth|submit|send|attempt|move|flags|refresh|connect|...
+    status: text('status', { enum: ['ok', 'failed'] }).notNull(),
+    detail: text('detail'),
+    error: text('error'),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => [
+    index('activity_org_created').on(t.orgId, t.createdAt),
+    index('activity_account_created').on(t.accountId, t.createdAt),
+    index('activity_status_created').on(t.status, t.createdAt),
+  ],
+);
+
 export const uiSessions = sqliteTable('ui_sessions', {
   tokenHash: text('token_hash').primaryKey(),
   userId: text('user_id'),

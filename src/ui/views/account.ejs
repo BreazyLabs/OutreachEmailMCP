@@ -9,6 +9,12 @@
     Authentication expired — <a href="/auth/<%= account.provider %>/start">reconnect this account</a>. Queued mail resumes automatically after reconnecting.
   </div>
 <% } %>
+<% if (typeof warmupReady !== 'undefined' && !warmupReady && account.status === 'active') { %>
+  <div class="alert error">
+    ⚠️ <strong>Warmup not enabled:</strong> this account was connected before mailbox-write access was added, so sequencer warmup (moving mail out of spam, marking read) can't sync upstream.
+    <a href="/auth/<%= account.provider %>/start">Reconnect the account</a> to grant the new permission — existing credentials and history are kept.
+  </div>
+<% } %>
 
 <h2>SMTP credentials</h2>
 <div class="card">

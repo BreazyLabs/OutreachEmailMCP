@@ -14,6 +14,7 @@ import { logger } from '../logger.js';
 import { currentSession, hasValidUiSession } from '../ui/session.js';
 import { verifyConnectToken } from './connect-links.js';
 import { assertCanAddAccount, QuotaError } from '../tenancy/orgs.js';
+import { logActivity } from '../observability/activity.js';
 
 const STATE_COOKIE = 'ep_oauth_state';
 
@@ -155,6 +156,13 @@ export function registerOauthRoutes(app: FastifyInstance) {
       }
 
       logger.info({ provider, email: profile.email, accountId }, 'account connected');
+      logActivity({
+        category: 'oauth',
+        action: 'connect',
+        status: 'ok',
+        accountId,
+        detail: `${provider} account connected`,
+      });
       return finish({ email: profile.email });
     } catch (err) {
       logger.error({ provider, err: String(err) }, 'oauth callback failed');

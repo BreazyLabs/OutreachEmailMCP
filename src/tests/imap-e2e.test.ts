@@ -42,14 +42,49 @@ const RAW_B = Buffer.from(
     '',
   ].join('\r\n'),
 );
-const RAWS: Record<string, Buffer> = { 'prov-a': RAW_A, 'prov-b': RAW_B };
+const RAW_SPAM = Buffer.from(
+  [
+    'From: Warmup Partner <partner@warmup.example>',
+    'To: tester@gmail.com',
+    'Subject: warmup message in spam',
+    'Message-ID: <warm-1@example.com>',
+    'Date: Mon, 20 Jul 2026 09:00:00 +0000',
+    'Content-Type: text/plain',
+    '',
+    'this landed in spam',
+  ].join('\r\n'),
+);
+const RAWS: Record<string, Buffer> = { 'prov-a': RAW_A, 'prov-b': RAW_B, 'prov-spam': RAW_SPAM };
+
+// Simulated upstream state for warmup verification
+export const upstream = {
+  folders: { 'prov-spam': 'Spam' } as Record<string, string>,
+  flags: {} as Record<string, { seen?: boolean; flagged?: boolean }>,
+};
 
 vi.mock('../providers/index.js', () => ({
   providerFor: () => ({
+    supportsWrite: (scopes: string) => scopes.includes('gmail.modify'),
     async getMessageRaw(_accountId: string, messageId: string) {
       const raw = RAWS[messageId];
       if (!raw) throw new Error('unknown message');
       return raw;
+    },
+    async listMessageIds(_accountId: string, folder: string) {
+      return Object.entries(upstream.folders)
+        .filter(([, f]) => f === folder)
+        .map(([id]) => id);
+    },
+    async moveMessage(_accountId: string, messageId: string, _from: string, to: string) {
+      upstream.folders[messageId] = to;
+      return null;
+    },
+    async setMessageFlags(
+      _accountId: string,
+      messageId: string,
+      flags: { seen?: boolean; flagged?: boolean },
+    ) {
+      upstream.flags[messageId] = { ...upstream.flags[messageId], ...flags };
     },
     async pollChanges(_accountId: string, cursor: string) {
       return { newMessageIds: [], nextCursor: cursor };
@@ -92,6 +127,17 @@ beforeAll(async () => {
     .run();
   db.insert(schema.syncState)
     .values({ accountId, cursor: 'cursor-0', imapBackfilled: 1 })
+    .run();
+  const { encryptSecret } = await import('../crypto/secrets.js');
+  db.insert(schema.oauthTokens)
+    .values({
+      accountId,
+      accessTokenEnc: encryptSecret('x'),
+      refreshTokenEnc: encryptSecret('y'),
+      expiresAt: now + 3600_000,
+      scopes: 'gmail.send gmail.modify', // write-capable → warmup ops allowed
+      updatedAt: now,
+    })
     .run();
 
   const { createSmtpCredential } = await import('../smtp/credentials.js');
@@ -213,6 +259,33 @@ describe('IMAP end-to-end (real client over STARTTLS)', () => {
     expect(Buffer.concat(copyChunks).toString()).toContain('what I sent');
     const sentSeen = await client.search({ seen: true }, { uid: true });
     expect(sentSeen).toEqual([1]);
+
+    await client.logout();
+  }, 20_000);
+
+  it('supports the warmup flow: find spam, move to inbox upstream, sync flags', async () => {
+    const client = await connect();
+    // Spam folder is provider-backed: SELECT syncs it from upstream
+    const spam = await client.mailboxOpen('Spam');
+    expect(spam.exists).toBe(1);
+    const uids = (await client.search({ all: true }, { uid: true })) || [];
+    expect(uids).toHaveLength(1);
+
+    // warmup rescues the message from spam
+    await client.messageMove(String(uids[0]), 'INBOX', { uid: true });
+    expect(upstream.folders['prov-spam']).toBe('INBOX'); // upstream really changed
+
+    // spam is now empty; message shows up in INBOX
+    const spamAfter = await client.mailboxOpen('Spam');
+    expect(spamAfter.exists).toBe(0);
+    const inbox = await client.mailboxOpen('INBOX');
+    const found = (await client.search({ subject: 'warmup message in spam' }, { uid: true })) || [];
+    expect(found.length).toBe(1);
+    expect(inbox.exists).toBeGreaterThanOrEqual(3);
+
+    // marking read syncs upstream
+    await client.messageFlagsAdd(String(found[0]), ['\\Seen'], { uid: true });
+    expect(upstream.flags['prov-spam']?.seen).toBe(true);
 
     await client.logout();
   }, 20_000);

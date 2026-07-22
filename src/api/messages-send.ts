@@ -4,6 +4,7 @@ import MailComposer from 'nodemailer/lib/mail-composer/index.js';
 import type Mail from 'nodemailer/lib/mailer/index.js';
 import { enqueueSend } from '../queue/sendQueue.js';
 import { providerFor } from '../providers/index.js';
+import { logActivity } from '../observability/activity.js';
 import { loadAccount, requireScope } from './plugin.js';
 
 const addressList = z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]);
@@ -94,6 +95,13 @@ export function registerSendRoutes(app: FastifyInstance) {
           to: [...toArray(body.to), ...toArray(body.cc), ...toArray(body.bcc)],
         },
         subject: body.subject || null,
+      });
+      logActivity({
+        category: 'api',
+        action: 'submit',
+        status: 'ok',
+        accountId: account.id,
+        detail: `job=${job.id} to=${toArray(body.to).join(',')} subject=${body.subject}`.slice(0, 400),
       });
 
       return reply.code(202).send({

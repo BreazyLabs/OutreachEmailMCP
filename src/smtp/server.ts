@@ -3,6 +3,7 @@ import { verifyProxyCredential } from './credentials.js';
 import { providerFor } from '../providers/index.js';
 import { QuotaError } from '../tenancy/orgs.js';
 import { enqueueSend } from '../queue/sendQueue.js';
+import { logActivity } from '../observability/activity.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { loadTlsMaterial } from './certs.js';
@@ -37,8 +38,22 @@ export function startSmtpServer(): SMTPServer {
         ? verifyProxyCredential(auth.username ?? '', auth.password)
         : null;
       if (!account) {
+        logActivity({
+          category: 'smtp',
+          action: 'auth',
+          status: 'failed',
+          detail: `username=${(auth.username ?? '').slice(0, 60)}`,
+          error: 'Invalid credentials',
+        });
         return callback(smtpError('Invalid username or password', 535));
       }
+      logActivity({
+        category: 'smtp',
+        action: 'auth',
+        status: 'ok',
+        accountId: account.id,
+        detail: `username=${auth.username}`,
+      });
       const user: SessionUser = {
         accountId: account.id,
         email: account.email,
@@ -93,8 +108,23 @@ export function startSmtpServer(): SMTPServer {
             { jobId: job.id, account: user.email, bytes: raw.length },
             'smtp message queued',
           );
+          logActivity({
+            category: 'smtp',
+            action: 'submit',
+            status: 'ok',
+            accountId: user.accountId,
+            detail: `job=${job.id} to=${session.envelope.rcptTo.map((r) => r.address).join(',')} subject=${job.subject ?? ''}`.slice(0, 400),
+          });
           callback(null, `Queued as ${job.id}`);
         } catch (err) {
+          logActivity({
+            category: 'smtp',
+            action: 'submit',
+            status: 'failed',
+            accountId: user.accountId,
+            detail: `to=${session.envelope.rcptTo.map((r) => r.address).join(',')}`,
+            error: String(err),
+          });
           if (err instanceof QuotaError) {
             return callback(smtpError(err.message, 452));
           }

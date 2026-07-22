@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '../db/index.js';
 import { deleteAccountSpoolFiles } from '../queue/sendQueue.js';
@@ -72,6 +72,27 @@ export function registerAccountRoutes(app: FastifyInstance) {
     const account = loadAccount(req.params.accountId, req);
     if (!account) return reply.code(404).send({ error: 'Unknown account' });
     return publicAccount(account);
+  });
+
+  // Transaction log: every operation with pass/fail, filterable.
+  app.get<{
+    Querystring: { status?: string; category?: string; accountId?: string; limit?: string };
+  }>('/activity', async (req, reply) => {
+    if (!requireScope(req, reply, 'read')) return;
+    const conditions = [eq(schema.activityLog.orgId, orgOf(req))];
+    if (req.query.status === 'ok' || req.query.status === 'failed') {
+      conditions.push(eq(schema.activityLog.status, req.query.status));
+    }
+    if (req.query.category) conditions.push(eq(schema.activityLog.category, req.query.category));
+    if (req.query.accountId) conditions.push(eq(schema.activityLog.accountId, req.query.accountId));
+    const limit = Math.min(Number(req.query.limit) || 100, 500);
+    return db
+      .select()
+      .from(schema.activityLog)
+      .where(and(...conditions))
+      .orderBy(desc(schema.activityLog.createdAt))
+      .limit(limit)
+      .all();
   });
 
   app.delete<{ Params: { accountId: string } }>('/accounts/:accountId', async (req, reply) => {

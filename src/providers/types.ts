@@ -32,6 +32,10 @@ export interface PollResult {
   nextCursor: string;
 }
 
+// Folders the IMAP facade exposes as provider-backed (warmup needs Spam).
+export type CanonicalFolder = 'INBOX' | 'Spam' | 'Sent';
+export const PROVIDER_FOLDERS: CanonicalFolder[] = ['INBOX', 'Spam', 'Sent'];
+
 // Both providers speak raw RFC822 MIME on the send path; reads are normalized
 // into the shapes above. All methods take an accountId and resolve tokens via
 // the shared token store.
@@ -48,4 +52,25 @@ export interface Provider {
   initCursor(accountId: string): Promise<string>;
   /** Return inbox messages that arrived since the cursor, plus the advanced cursor. */
   pollChanges(accountId: string, cursor: string): Promise<PollResult>;
+  /** Whether the granted OAuth scopes permit upstream writes (move/flags). */
+  supportsWrite(grantedScopes: string): boolean;
+  /** Newest message ids in a canonical folder (up to limit). */
+  listMessageIds(accountId: string, folder: CanonicalFolder, limit: number): Promise<string[]>;
+  /**
+   * Move a message between canonical folders upstream. Returns the message's
+   * new provider id when the provider reassigns ids on move (Graph does),
+   * otherwise null.
+   */
+  moveMessage(
+    accountId: string,
+    messageId: string,
+    from: CanonicalFolder,
+    to: CanonicalFolder,
+  ): Promise<string | null>;
+  /** Set read/starred state upstream. */
+  setMessageFlags(
+    accountId: string,
+    messageId: string,
+    flags: { seen?: boolean; flagged?: boolean },
+  ): Promise<void>;
 }

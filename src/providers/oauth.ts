@@ -10,11 +10,13 @@ export interface TokenSet {
   scopes: string;
 }
 
+// gmail.modify / Mail.ReadWrite (not the read-only variants): warmup tools
+// need to move mail out of Spam and set read/star state upstream.
 export const GOOGLE_SCOPES = [
   'openid',
   'email',
   'https://www.googleapis.com/auth/gmail.send',
-  'https://www.googleapis.com/auth/gmail.readonly',
+  'https://www.googleapis.com/auth/gmail.modify',
 ];
 
 export const MICROSOFT_SCOPES = [
@@ -23,7 +25,7 @@ export const MICROSOFT_SCOPES = [
   'offline_access',
   'https://graph.microsoft.com/User.Read',
   'https://graph.microsoft.com/Mail.Send',
-  'https://graph.microsoft.com/Mail.Read',
+  'https://graph.microsoft.com/Mail.ReadWrite',
 ];
 
 interface Endpoints {

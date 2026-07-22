@@ -15,6 +15,7 @@ import { registerMcpRoutes } from './mcp/server.js';
 import { registerSsoRoutes } from './auth/sso.js';
 import { registerOauthRoutes } from './auth/oauth-routes.js';
 import { startTokenRefreshSweep } from './auth/tokens.js';
+import { startActivityPruner } from './observability/activity.js';
 import { registerUiRoutes } from './ui/routes.js';
 import { apiKeyAuth, registerApiErrorHandler } from './api/plugin.js';
 import { registerAccountRoutes } from './api/accounts.js';
@@ -82,6 +83,7 @@ async function main() {
   const stopWebhookWorker = startWebhookWorker();
   const stopPoller = startInboundPoller();
   startTokenRefreshSweep();
+  startActivityPruner();
 
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'shutting down');
