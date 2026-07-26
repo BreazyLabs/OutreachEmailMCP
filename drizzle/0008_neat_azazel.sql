@@ -1,0 +1,1 @@
+ALTER TABLE `orgs` ADD `connect_link_version` integer DEFAULT 0 NOT NULL;

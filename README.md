@@ -55,15 +55,31 @@ Scopes used: `Mail.Send`, `Mail.ReadWrite`, `User.Read`, `offline_access` (`Mail
 
 ## Connect links (automation-friendly onboarding)
 
-The dashboard shows **direct connect links** next to the Connect buttons — signed URLs that open the provider's OAuth consent screen *without* requiring the admin login. Share one with a user (or drive it from an automation) and the account appears in the proxy once they complete consent. Mint them programmatically:
+The dashboard shows an **onboarding link** — one signed URL that opens a connect page *without* requiring the admin login. Hand it to whoever adds mailboxes (a teammate, a VA, an automation) and they open it once per mailbox.
+
+**One link, many mailboxes.** Nothing about the link is consumed by use, and it does not expire by default. Each visit shows the workspace, how many mailboxes are connected against the plan limit, which ones are already in (so nobody adds a duplicate), and buttons for every configured provider. After each consent round-trip the browser comes back to the same page with the result, ready for the next mailbox. Concurrent flows are supported — the same link can be open in several tabs at once.
+
+**Failures are explained where they happen.** Consent cancelled, permission checkboxes left unticked, mailbox already in another workspace, plan limit reached, link expired or revoked, provider outage — each renders a plain-language page saying what happened and what to do next, and is recorded in the Activity log for the admin. Nothing is written when a connect fails, so retrying is always safe.
+
+Mint links programmatically:
 
 ```bash
+# Reusable hub link, no expiry (recommended for onboarding)
+curl -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{}' localhost:3000/api/v1/connect-links
+# → {"provider":"any","url":"https://…/connect?token=…","reusable":true,"expiresAt":null}
+
+# Provider-specific link that skips the chooser page (expires by default)
 curl -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
   -d '{"provider":"google","expiresInHours":168}' localhost:3000/api/v1/connect-links
-# → {"provider":"google","url":"https://…/auth/google/start?token=…","expiresAt":…}
+
+# Revoke every link issued for this workspace and get a fresh one
+curl -X DELETE -H "Authorization: Bearer $KEY" localhost:3000/api/v1/connect-links
 ```
 
-Tokens are HMAC-signed with `MASTER_KEY`, stateless, and expire (default 7 days).
+Tokens are HMAC-signed with `MASTER_KEY` and stateless — no rows, no shared secrets to leak. Provider-specific links expire (`CONNECT_LINK_TTL_HOURS`, default 7 days); the hub link is non-expiring and revoked instead, via the dashboard's **Revoke & regenerate** button, `DELETE /api/v1/connect-links`, or the `revoke_connect_links` MCP tool — which invalidates every link handed out so far in one go.
+
+**Guards on what gets stored.** A grant missing `gmail.send`/`gmail.modify` (or `Mail.Send`/`Mail.ReadWrite`) is rejected rather than saved as a mailbox that can never send; so is a grant that comes back without a long-lived refresh token. The plan limit is re-checked at the moment of insert, so parallel connects cannot overshoot it. Re-connecting a mailbox that is already in the workspace refreshes its access instead of creating a duplicate.
 
 ## Connect to your sequencer (CSV export)
 
@@ -204,7 +220,7 @@ Everything above describes the default **self-hosted** mode: one workspace, `ADM
 - **Workspaces**: public signup (`/ui/signup`, email + scrypt-hashed password) creates an isolated org. Accounts, API keys, webhooks, SMTP/IMAP credentials, send logs, and CSV exports are all scoped per org; cross-tenant ids read as 404.
 - **Google SSO**: with `GOOGLE_CLIENT_ID/SECRET` set, login and signup pages show **Continue with Google** — register the extra redirect URI `{BASE_URL}/auth/sso/google/callback` in your Google OAuth client. New Google sign-ins get their own workspace automatically (identity scopes only; unrelated to mailbox connects).
 - **Connect links** embed the workspace, so onboarding automation works per tenant.
-- **Quotas**: plans (`free`/`pro`) limit connected accounts and sends per 24h (`PLAN_*` env vars). Hitting a limit returns API `429` / SMTP `452` (temporary, client retries later) / a UI notice — never lost mail.
+- **Quotas**: plans (`free`/`pro`) limit connected accounts and sends per 24h (`PLAN_*` env vars). Hitting a limit returns API `429` / SMTP `452` (temporary, client retries later) / a UI notice — never lost mail. To move a workspace between plans without Stripe (e.g. granting yourself pro on your own instance): `npm run set-plan -- --list` to see every workspace, then `npm run set-plan -- --email owner@example.com --plan pro`. On a Docker host, `docker exec -it <container> npm run set-plan -- --list`.
 - **Billing** (optional): set `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, and `STRIPE_PRICE_PRO` to enable Stripe Checkout upgrades and the customer portal. Point a Stripe webhook at `/billing/stripe/webhook` (events: `checkout.session.completed`, `customer.subscription.deleted`). No Stripe SDK — plain REST with signature verification. **Shared Stripe accounts are safe**: checkout sessions and subscriptions are stamped with `metadata.app=outreachemailmcp`, and the webhook acknowledges-but-ignores any event object without that marker, so other apps' events on the same account can never touch workspace plans.
 
 Operational notes for running it as a service: put the HTTP side behind TLS (Caddy/nginx), provide real certs for SMTP/IMAP STARTTLS via `SMTP_TLS_CERT`/`SMTP_TLS_KEY`, and note that offering Gmail's `gmail.readonly` scope in a public OAuth app requires Google's app verification plus an annual CASA security assessment. Single-node SQLite comfortably serves hundreds of workspaces; beyond that, the growth path is Postgres + per-tenant sharding.

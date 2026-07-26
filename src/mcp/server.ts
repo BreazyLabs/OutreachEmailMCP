@@ -9,7 +9,11 @@ import { providerFor } from '../providers/index.js';
 import { enqueueSend } from '../queue/sendQueue.js';
 import { buildMime } from '../api/messages-send.js';
 import { publicJob } from '../api/send-log.js';
-import { createConnectLink } from '../auth/connect-links.js';
+import {
+  createConnectHubLink,
+  createConnectLink,
+  revokeConnectLinks,
+} from '../auth/connect-links.js';
 import { buildAccountsCsv, SEQUENCER_FORMATS } from '../export/accounts-csv.js';
 import { hasScope, type ApiScope } from '../api/plugin.js';
 import { config } from '../config.js';
@@ -271,15 +275,37 @@ export function buildMcpServer(auth: McpAuth): McpServer {
   if (can('accounts')) {
     server.tool(
       'create_connect_link',
-      'Create a signed OAuth link that lets someone connect a new Gmail or Microsoft mailbox to this workspace without logging in. Share it with the mailbox owner.',
+      'Create a signed OAuth link that lets someone connect Gmail or Microsoft mailboxes to this workspace without logging in. The link is REUSABLE: hand it over once and open it again for every further mailbox — it is not consumed. Omit provider for a link that offers both providers, lists what is already connected, and never expires (revoke it with revoke_connect_links).',
       {
-        provider: z.enum(['google', 'microsoft']),
-        expiresInHours: z.number().int().min(1).max(2160).optional(),
+        provider: z.enum(['google', 'microsoft']).optional(),
+        expiresInHours: z.number().int().min(0).max(8760).optional(),
       },
       async ({ provider, expiresInHours }) => {
-        const enabled = provider === 'google' ? config.googleEnabled : config.microsoftEnabled;
-        if (!enabled) throw new Error(`${provider} OAuth is not configured on this instance`);
-        return text({ url: createConnectLink(provider, auth.orgId, expiresInHours ?? 168) });
+        if (provider) {
+          const enabled = provider === 'google' ? config.googleEnabled : config.microsoftEnabled;
+          if (!enabled) throw new Error(`${provider} OAuth is not configured on this instance`);
+          return text({
+            url: createConnectLink(
+              provider,
+              auth.orgId,
+              expiresInHours ?? config.CONNECT_LINK_TTL_HOURS,
+            ),
+            reusable: true,
+          });
+        }
+        return text({
+          url: createConnectHubLink(auth.orgId, expiresInHours ?? 0),
+          reusable: true,
+        });
+      },
+    );
+    server.tool(
+      'revoke_connect_links',
+      'Invalidate every connect link ever issued for this workspace and return a fresh one. Use if a link leaked.',
+      {},
+      async () => {
+        revokeConnectLinks(auth.orgId);
+        return text({ revoked: true, url: createConnectHubLink(auth.orgId) });
       },
     );
   }

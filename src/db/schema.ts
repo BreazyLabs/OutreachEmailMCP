@@ -9,6 +9,9 @@ export const orgs = sqliteTable('orgs', {
   status: text('status', { enum: ['active', 'suspended'] }).notNull().default('active'),
   stripeCustomerId: text('stripe_customer_id'),
   stripeSubscriptionId: text('stripe_subscription_id'),
+  // Bumped to invalidate every connect link ever issued for this workspace.
+  // Connect links are stateless, so this counter is the only revocation lever.
+  connectLinkVersion: integer('connect_link_version').notNull().default(0),
   createdAt: integer('created_at').notNull(),
 });
 

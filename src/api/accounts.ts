@@ -4,7 +4,11 @@ import { z } from 'zod';
 import { db, schema } from '../db/index.js';
 import { deleteAccountSpoolFiles } from '../queue/sendQueue.js';
 import { buildAccountsCsv } from '../export/accounts-csv.js';
-import { createConnectLink } from '../auth/connect-links.js';
+import {
+  createConnectHubLink,
+  createConnectLink,
+  revokeConnectLinks,
+} from '../auth/connect-links.js';
 import { config } from '../config.js';
 import { loadAccount, orgOf, requireScope } from './plugin.js';
 
@@ -47,24 +51,41 @@ export function registerAccountRoutes(app: FastifyInstance) {
   });
 
   // Mint a signed OAuth connect link that works without an admin session —
-  // hand it to a user or automation to add a new account.
+  // hand it to a user or automation to add accounts. The link is reusable:
+  // opening it once per mailbox is the intended flow, and nothing about it is
+  // consumed by use. Omit `provider` for a hub link that offers every
+  // configured provider and shows what is already connected.
   app.post('/connect-links', async (req, reply) => {
     if (!requireScope(req, reply, 'accounts')) return;
     const body = z
       .object({
-        provider: z.enum(['google', 'microsoft']),
-        expiresInHours: z.coerce.number().min(1).max(24 * 90).default(168),
+        provider: z.enum(['google', 'microsoft']).optional(),
+        // 0 = never expires (revoke with DELETE /connect-links instead)
+        expiresInHours: z.coerce.number().min(0).max(24 * 365).optional(),
       })
       .parse(req.body ?? {});
-    const enabled = body.provider === 'google' ? config.googleEnabled : config.microsoftEnabled;
-    if (!enabled) {
-      return reply.code(409).send({ error: `${body.provider} OAuth is not configured` });
+    if (body.provider) {
+      const enabled = body.provider === 'google' ? config.googleEnabled : config.microsoftEnabled;
+      if (!enabled) {
+        return reply.code(409).send({ error: `${body.provider} OAuth is not configured` });
+      }
     }
+    const hours = body.expiresInHours ?? (body.provider ? config.CONNECT_LINK_TTL_HOURS : 0);
     return {
-      provider: body.provider,
-      url: createConnectLink(body.provider, orgOf(req), body.expiresInHours),
-      expiresAt: Date.now() + body.expiresInHours * 3600_000,
+      provider: body.provider ?? 'any',
+      url: body.provider
+        ? createConnectLink(body.provider, orgOf(req), hours)
+        : createConnectHubLink(orgOf(req), hours),
+      reusable: true,
+      expiresAt: hours > 0 ? Date.now() + hours * 3600_000 : null,
     };
+  });
+
+  // Revoke every connect link issued for this workspace so far.
+  app.delete('/connect-links', async (req, reply) => {
+    if (!requireScope(req, reply, 'accounts')) return;
+    revokeConnectLinks(orgOf(req));
+    return { revoked: true, url: createConnectHubLink(orgOf(req)) };
   });
 
   app.get<{ Params: { accountId: string } }>('/accounts/:accountId', async (req, reply) => {

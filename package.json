@@ -16,6 +16,7 @@
     "db:generate": "drizzle-kit generate",
     "create-api-key": "tsx src/cli/create-api-key.ts",
     "create-smtp-credential": "tsx src/cli/create-smtp-credential.ts",
+    "set-plan": "tsx src/cli/set-plan.ts",
     "pretest": "rm -rf data-test",
     "test": "vitest run"
   },

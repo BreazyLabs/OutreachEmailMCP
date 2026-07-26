@@ -28,9 +28,66 @@ describe('tenancy', () => {
     const { createConnectLink, verifyConnectToken } = await import('../auth/connect-links.js');
     const url = createConnectLink('google', orgA, 1);
     const token = new URL(url).searchParams.get('token')!;
-    expect(verifyConnectToken('google', token)).toBe(orgA);
-    expect(verifyConnectToken('microsoft', token)).toBeNull(); // provider-bound
-    expect(verifyConnectToken('google', token.replace(orgA, 'org_other'))).toBeNull();
+    expect(verifyConnectToken(token, 'google')).toMatchObject({ ok: true, orgId: orgA });
+    // provider-bound
+    expect(verifyConnectToken(token, 'microsoft')).toEqual({ ok: false, reason: 'wrong_provider' });
+    expect(verifyConnectToken(token.replace(orgA, 'org_other'))).toEqual({
+      ok: false,
+      reason: 'malformed',
+    });
+  });
+
+  it('keeps the hub link reusable, stable, and revocable', async () => {
+    const { createConnectHubLink, revokeConnectLinks, verifyConnectToken } = await import(
+      '../auth/connect-links.js'
+    );
+    const url = createConnectHubLink(orgA);
+    // Same URL every time, so the one handed out stays the one shown
+    expect(createConnectHubLink(orgA)).toBe(url);
+    const token = new URL(url).searchParams.get('token')!;
+    // Opening it repeatedly never consumes it, and it works for both providers
+    for (let i = 0; i < 3; i++) {
+      expect(verifyConnectToken(token, 'google')).toMatchObject({ ok: true, orgId: orgA });
+      expect(verifyConnectToken(token, 'microsoft')).toMatchObject({ ok: true, orgId: orgA });
+    }
+    revokeConnectLinks(orgA);
+    expect(verifyConnectToken(token)).toEqual({ ok: false, reason: 'revoked' });
+    expect(createConnectHubLink(orgA)).not.toBe(url);
+    const fresh = new URL(createConnectHubLink(orgA)).searchParams.get('token')!;
+    expect(verifyConnectToken(fresh)).toMatchObject({ ok: true, orgId: orgA });
+  });
+
+  it('reuses one connect link across concurrent OAuth flows', async () => {
+    const { createOauthState, verifyOauthState } = await import('../auth/connect-links.js');
+    // Two mailboxes being added at the same time from the same link: both
+    // states must stay valid (no single-slot cookie to overwrite).
+    const first = createOauthState('google', orgA, 'hub-token');
+    const second = createOauthState('google', orgA, 'hub-token');
+    expect(first).not.toBe(second);
+    expect(verifyOauthState('google', first)).toEqual({ orgId: orgA, hubToken: 'hub-token' });
+    expect(verifyOauthState('google', second)).toEqual({ orgId: orgA, hubToken: 'hub-token' });
+    expect(verifyOauthState('microsoft', first)).toBeNull(); // provider-bound
+    expect(verifyOauthState('google', first.replace(orgA, 'org_other'))).toBeNull();
+    expect(verifyOauthState('google', 'garbage')).toBeNull();
+    expect(verifyOauthState('google', createOauthState('google', orgA, null))).toEqual({
+      orgId: orgA,
+      hubToken: null,
+    });
+  });
+
+  it('rejects partial consent grants', async () => {
+    const { missingScopes } = await import('../providers/oauth.js');
+    const full =
+      'openid email https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.modify';
+    expect(missingScopes('google', full)).toEqual([]);
+    // User unticked "read, compose and send" on the consent screen
+    expect(missingScopes('google', 'openid email https://www.googleapis.com/auth/gmail.send')).toEqual(
+      ['gmail.modify'],
+    );
+    expect(missingScopes('microsoft', 'User.Read Mail.Send Mail.ReadWrite')).toEqual([]);
+    expect(missingScopes('microsoft', 'User.Read Mail.Send')).toEqual(['Mail.ReadWrite']);
+    // No scope info from the provider is not evidence of a partial grant
+    expect(missingScopes('google', '')).toEqual([]);
   });
 
   it('enforces account and send quotas per plan', async () => {

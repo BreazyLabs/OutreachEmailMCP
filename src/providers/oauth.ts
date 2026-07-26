@@ -28,6 +28,25 @@ export const MICROSOFT_SCOPES = [
   'https://graph.microsoft.com/Mail.ReadWrite',
 ];
 
+// Consent screens let people untick individual permissions. Without these the
+// account looks connected but can never send or read, so the connect flow
+// rejects the grant instead of storing a mailbox that is broken from birth.
+const REQUIRED_SCOPES: Record<ProviderName, string[]> = {
+  google: ['gmail.send', 'gmail.modify'],
+  microsoft: ['Mail.Send', 'Mail.ReadWrite'],
+};
+
+const scopeLeaf = (scope: string) => scope.split('/').pop()!.toLowerCase();
+
+// Returns the required scopes the provider did NOT grant.
+export function missingScopes(provider: ProviderName, granted: string): string[] {
+  // Some providers omit `scope` on the token response; treat that as "no
+  // information" rather than "nothing granted".
+  if (!granted.trim()) return [];
+  const have = new Set(granted.split(/\s+/).map(scopeLeaf));
+  return REQUIRED_SCOPES[provider].filter((s) => !have.has(scopeLeaf(s)));
+}
+
 interface Endpoints {
   authUrl: string;
   tokenUrl: string;
@@ -46,8 +65,11 @@ function endpoints(provider: ProviderName): Endpoints {
       clientId: config.GOOGLE_CLIENT_ID!,
       clientSecret: config.GOOGLE_CLIENT_SECRET!,
       scopes: GOOGLE_SCOPES,
-      // offline + consent forces Google to re-issue a refresh token
-      extraAuthParams: { access_type: 'offline', prompt: 'consent' },
+      // offline + consent forces Google to re-issue a refresh token;
+      // select_account stops Google silently reusing the browser's current
+      // session, which otherwise makes a reused connect link reconnect the
+      // same mailbox instead of letting the user pick another one.
+      extraAuthParams: { access_type: 'offline', prompt: 'consent select_account' },
     };
   }
   if (!config.microsoftEnabled) throw new Error('Microsoft OAuth is not configured');

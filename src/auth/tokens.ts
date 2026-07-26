@@ -39,6 +39,23 @@ export function saveTokens(accountId: string, tokens: TokenSet): void {
     .run();
 }
 
+// True when the account has a usable long-lived token on file. The connect
+// flow checks this before accepting a grant: an account whose provider never
+// returned a refresh token dies as soon as the access token expires.
+export function hasRefreshToken(accountId: string): boolean {
+  const row = db
+    .select({ enc: schema.oauthTokens.refreshTokenEnc })
+    .from(schema.oauthTokens)
+    .where(eq(schema.oauthTokens.accountId, accountId))
+    .get();
+  if (!row) return false;
+  try {
+    return decryptSecret(row.enc).length > 0;
+  } catch {
+    return false;
+  }
+}
+
 export function markAuthError(accountId: string, message: string): void {
   db.update(schema.accounts)
     .set({ status: 'auth_error', lastError: message.slice(0, 500), updatedAt: Date.now() })

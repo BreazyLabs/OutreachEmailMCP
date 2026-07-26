@@ -1,0 +1,70 @@
+<%# Standalone onboarding page for connect-link holders — no admin login. %>
+<%- include('_header', { error: null }) %>
+<div style="max-width:560px; margin:6vh auto;">
+
+  <% if (outcome) { %>
+    <div class="card" style="border-left:4px solid var(--<%= outcome.tone === 'ok' ? 'ok' : 'err' %>)">
+      <h2 style="margin:0 0 0.4rem"><%= outcome.tone === 'ok' ? '✅' : '⚠️' %> <%= outcome.title %></h2>
+      <p style="margin:0 0 0.5rem"><%= outcome.detail %></p>
+      <% if (outcome.fix) { %><p class="muted" style="margin:0"><strong>Next:</strong> <%= outcome.fix %></p><% } %>
+    </div>
+  <% } %>
+
+  <% if (!token) { %>
+    <div class="card">
+      <p class="muted" style="margin:0">Nothing else can be done from this page. Once you have a working link, open it again — the same link connects as many mailboxes as the workspace allows.</p>
+    </div>
+  <% } else { %>
+
+    <div class="card">
+      <h1 style="margin:0 0 0.3rem">Connect a mailbox</h1>
+      <p class="muted" style="margin:0 0 1rem">
+        <% if (workspace) { %>Workspace: <strong><%= workspace %></strong><% } %>
+        <% if (usage) { %>
+          · <%= usage.used %><% if (usage.max) { %> of <%= usage.max %><% } %> mailbox<%= usage.used === 1 ? '' : 'es' %> connected
+        <% } %>
+      </p>
+
+      <% if (usage && usage.full) { %>
+        <p class="alert error" style="margin:0">This workspace is at its mailbox limit. An admin must upgrade the plan or disconnect a mailbox before another can be added.</p>
+      <% } else if (providers.length === 0) { %>
+        <p class="alert error" style="margin:0">No mail providers are configured on this server, so nothing can be connected yet. Ask an admin to set this up.</p>
+      <% } else { %>
+        <div class="row">
+          <% for (const p of providers) { %>
+            <a class="btn" href="<%= p.href %>">+ Connect <%= p.label %></a>
+          <% } %>
+        </div>
+        <p class="muted" style="margin:0.9rem 0 0">Open this same link again for every further mailbox — it does not run out. On the provider's screen, pick the mailbox you want to add and leave all permission checkboxes ticked.</p>
+      <% } %>
+    </div>
+
+    <% if (accounts.length) { %>
+    <div class="card">
+      <h2 style="margin:0 0 0.6rem">Already connected</h2>
+      <table>
+        <% for (const a of accounts) { %>
+        <tr>
+          <td><%= a.email %></td>
+          <td style="width:1%"><span class="badge <%= a.status %>"><%= a.status.replace('_', ' ') %></span></td>
+        </tr>
+        <% } %>
+      </table>
+      <p class="muted" style="margin:0.7rem 0 0">A mailbox listed here does not need connecting again. Re-connecting one only refreshes its access — it never creates a duplicate.</p>
+    </div>
+    <% } %>
+
+    <div class="card">
+      <h2 style="margin:0 0 0.6rem">If something goes wrong</h2>
+      <ul class="muted" style="margin:0; padding-left:1.1rem; line-height:1.7">
+        <li><strong>Wrong mailbox appeared</strong> — you were signed in as someone else. Connect again and choose the right account on the provider's chooser.</li>
+        <li><strong>"Permissions were left unchecked"</strong> — go back and tick every box; the mailbox cannot send or read without them.</li>
+        <li><strong>"Belongs to another workspace"</strong> — that mailbox is connected elsewhere on this server and must be removed there first.</li>
+        <li><strong>"Link is not valid / expired / revoked"</strong> — ask for a fresh link; nothing on your side can fix it.</li>
+        <li><strong>Anything else</strong> — nothing is saved when a connect fails, so it is always safe to try again.</li>
+      </ul>
+    </div>
+
+  <% } %>
+</div>
+<%- include('_footer') %>

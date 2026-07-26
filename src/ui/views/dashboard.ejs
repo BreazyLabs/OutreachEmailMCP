@@ -7,21 +7,38 @@
     <span class="muted">No OAuth providers configured — set GOOGLE_CLIENT_ID/SECRET or MICROSOFT_CLIENT_ID/SECRET in .env</span>
   <% } %>
 </div>
-<% if (connectLinks.google || connectLinks.microsoft) { %>
+<% if (connectLinks.hub) { %>
 <div class="card">
-  <p class="muted" style="margin-top:0">Direct connect links (no admin login needed — share with users or automations; valid 7 days):</p>
-  <% if (connectLinks.google) { %>
-  <div class="row" style="margin-bottom:0.4rem">
-    <span style="min-width:75px">Gmail</span>
-    <input class="mono" readonly value="<%= connectLinks.google %>" onclick="this.select()" style="flex:1">
+  <div class="row" style="justify-content:space-between; align-items:flex-start">
+    <div>
+      <strong>Onboarding link</strong>
+      <p class="muted" style="margin:0.25rem 0 0; max-width:62ch">Hand this one URL to whoever adds mailboxes (a person, a VA, or an automation). It never expires and is <strong>not used up</strong> — opening it again adds the next mailbox. It shows what is already connected and explains any failure in plain language. No admin login needed.</p>
+    </div>
+    <form method="post" action="/ui/connect-links/revoke" onsubmit="return confirm('Revoke every connect link issued so far? Anyone still holding an old link will have to be given the new one.')">
+      <input type="hidden" name="_csrf" value="<%= csrf %>">
+      <button class="secondary" type="submit">Revoke &amp; regenerate</button>
+    </form>
   </div>
-  <% } %>
-  <% if (connectLinks.microsoft) { %>
-  <div class="row">
-    <span style="min-width:75px">Microsoft</span>
-    <input class="mono" readonly value="<%= connectLinks.microsoft %>" onclick="this.select()" style="flex:1">
+  <div class="row" style="margin-top:0.7rem">
+    <input class="mono" readonly value="<%= connectLinks.hub %>" onclick="this.select()" style="flex:1">
+    <a class="btn secondary" href="<%= connectLinks.hub %>" target="_blank" rel="noopener">Open</a>
   </div>
-  <% } %>
+  <details style="margin-top:0.8rem">
+    <summary class="muted" style="cursor:pointer">Provider-specific links (skip the chooser page)</summary>
+    <% if (connectLinks.google) { %>
+    <div class="row" style="margin:0.5rem 0 0.4rem">
+      <span style="min-width:75px">Gmail</span>
+      <input class="mono" readonly value="<%= connectLinks.google %>" onclick="this.select()" style="flex:1">
+    </div>
+    <% } %>
+    <% if (connectLinks.microsoft) { %>
+    <div class="row">
+      <span style="min-width:75px">Microsoft</span>
+      <input class="mono" readonly value="<%= connectLinks.microsoft %>" onclick="this.select()" style="flex:1">
+    </div>
+    <% } %>
+    <p class="muted" style="margin:0.5rem 0 0">Also reusable, but they expire (default 7 days, <code>CONNECT_LINK_TTL_HOURS</code>) and go straight to one provider.</p>
+  </details>
 </div>
 <% } %>
 

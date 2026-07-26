@@ -9,7 +9,11 @@ import { isPrivateWebhookTarget } from '../inbound/webhooks.js';
 import { deleteAccountSpoolFiles } from '../queue/sendQueue.js';
 import { createSmtpCredential, smtpAdvertisedHost } from '../smtp/credentials.js';
 import { buildAccountsCsv } from '../export/accounts-csv.js';
-import { createConnectLink } from '../auth/connect-links.js';
+import {
+  createConnectHubLink,
+  createConnectLink,
+  revokeConnectLinks,
+} from '../auth/connect-links.js';
 import { publicJob } from '../api/send-log.js';
 import { providerFor } from '../providers/index.js';
 import { ALL_SCOPES } from '../api/plugin.js';
@@ -60,7 +64,7 @@ function baseLocals(req: Req, session?: SessionContext | null) {
     orgName: session?.org.name ?? null,
     baseUrl: config.BASE_URL.replace(/\/$/, ''),
     error: (req.query as { error?: string }).error ?? null,
-    notice: null as string | null,
+    notice: ((req.query as { notice?: string }).notice ?? null) as string | null,
   };
 }
 
@@ -147,6 +151,10 @@ export function registerUiRoutes(app: FastifyInstance) {
       page: 'dashboard',
       accounts,
       connectLinks: {
+        // Durable, reusable, revocable — the one to hand to whoever onboards
+        // mailboxes. The per-provider links stay available for automations
+        // that want to skip the chooser.
+        hub: config.googleEnabled || config.microsoftEnabled ? createConnectHubLink(orgId) : null,
         google: config.googleEnabled ? createConnectLink('google', orgId) : null,
         microsoft: config.microsoftEnabled ? createConnectLink('microsoft', orgId) : null,
       },
@@ -374,6 +382,16 @@ export function registerUiRoutes(app: FastifyInstance) {
       )
       .run();
     return reply.redirect('/ui/apikeys');
+  });
+
+  // Connect links are stateless signatures, so "revoke" means bumping the
+  // workspace's link generation — every link handed out so far stops working
+  // and the dashboard shows the new one.
+  app.post('/ui/connect-links/revoke', async (req, reply) => {
+    const session = guardPost(req, reply);
+    if (!session) return;
+    revokeConnectLinks(session.org.id);
+    return reply.redirect('/ui?notice=Connect+links+revoked.+Share+the+new+link+below.');
   });
 
   app.get('/ui/webhooks', async (req, reply) => {

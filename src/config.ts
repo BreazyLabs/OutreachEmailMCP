@@ -53,6 +53,10 @@ const envSchema = z.object({
   SENT_RAW_RETENTION_HOURS: z.coerce.number().min(0).default(24),
   WEBHOOKS_ALLOW_PRIVATE: boolFromEnv,
 
+  // Default lifetime of provider-specific connect links, in hours (0 = never
+  // expires; the dashboard's hub link is non-expiring and revocable instead).
+  CONNECT_LINK_TTL_HOURS: z.coerce.number().int().min(0).default(168),
+
   // How long transaction/audit log rows are kept
   ACTIVITY_RETENTION_DAYS: z.coerce.number().int().min(1).default(30),
   LOG_LEVEL: z.string().default('info'),
