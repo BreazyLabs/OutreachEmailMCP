@@ -18,6 +18,7 @@ import {
   verifyConnectToken,
   createOauthState,
   verifyOauthState,
+  type LinkScope,
   type TokenFailure,
 } from './connect-links.js';
 import { describeOutcome, isOutcomeCode, type OutcomeCode } from './connect-outcomes.js';
@@ -51,6 +52,8 @@ function renderConnectPage(
   opts: {
     orgId: string | null;
     token: string | null;
+    // A provider-scoped link only offers that provider; 'any' offers all.
+    scope?: LinkScope;
     outcomeCode?: OutcomeCode | null;
     outcomeContext?: { email?: string | null; detail?: string | null; provider?: string | null };
   },
@@ -84,8 +87,9 @@ function renderConnectPage(
     : [];
   const limits = org ? planLimits(org) : null;
   const used = org ? countAccounts(org.id) : 0;
+  const scope = opts.scope ?? 'any';
   const providers = (['google', 'microsoft'] as ProviderName[])
-    .filter(providerEnabled)
+    .filter((p) => providerEnabled(p) && (scope === 'any' || scope === p))
     .map((p) => ({
       name: p,
       label: PROVIDER_LABEL[p],
@@ -155,6 +159,7 @@ export function registerOauthRoutes(app: FastifyInstance) {
       return renderConnectPage(reply, {
         orgId: verified.orgId,
         token,
+        scope: verified.scope,
         outcomeCode: status && isOutcomeCode(status) ? status : null,
         // Query values are shown back to the reader — bound their length.
         outcomeContext: { email: email?.slice(0, 200), detail: detail?.slice(0, 300) },
@@ -183,25 +188,17 @@ export function registerOauthRoutes(app: FastifyInstance) {
       const orgId = verified?.ok ? verified.orgId : currentSession(req)?.org.id ?? null;
       if (!orgId) return reply.redirect('/ui/login');
 
-      const linkFlow = Boolean(verified?.ok);
-      // Hub tokens come back to the connect page after each mailbox so the
-      // next one is one click away.
-      const hubToken = verified?.ok && verified.scope === 'any' ? verified.token : null;
+      // Every link flow — hub or provider-scoped — comes back to the connect
+      // page after each mailbox, so the next one is always one click away and
+      // the holder never has to re-find the original URL.
+      const returnToken = verified?.ok ? verified.token : null;
       const bail = (code: OutcomeCode, ctx?: { detail?: string }) => {
         logConnectFailure(orgId, code, ctx?.detail ?? code);
-        if (hubToken) {
-          return reply.redirect(hubResultUrl(hubToken, code, { detail: ctx?.detail }));
+        if (returnToken) {
+          return reply.redirect(connectResultUrl(returnToken, code, { detail: ctx?.detail }));
         }
-        if (!linkFlow) {
-          const message = describeOutcome(code, ctx).detail;
-          return reply.redirect(`/ui?error=${encodeURIComponent(message)}`);
-        }
-        return renderConnectPage(reply, {
-          orgId: null,
-          token: null,
-          outcomeCode: code,
-          outcomeContext: { provider: PROVIDER_LABEL[provider], detail: ctx?.detail },
-        });
+        const message = describeOutcome(code, ctx).detail;
+        return reply.redirect(`/ui?error=${encodeURIComponent(message)}`);
       };
 
       if (!providerEnabled(provider)) return bail('provider_disabled');
@@ -216,7 +213,7 @@ export function registerOauthRoutes(app: FastifyInstance) {
         }
         throw err;
       }
-      return reply.redirect(buildAuthUrl(provider, createOauthState(provider, orgId, hubToken)));
+      return reply.redirect(buildAuthUrl(provider, createOauthState(provider, orgId, returnToken)));
     },
   );
 
@@ -230,8 +227,8 @@ export function registerOauthRoutes(app: FastifyInstance) {
     const { code, state, error, error_description } = req.query;
     const verifiedState = state ? verifyOauthState(provider, state) : null;
 
-    // Where the result is shown: the admin dashboard for logged-in admins, the
-    // connect page for hub links, a standalone page for provider-only links.
+    // Where the result is shown: back on the connect page for any link flow,
+    // the admin dashboard for a connect started from the logged-in UI.
     const finish = (
       outcomeCode: OutcomeCode,
       ctx: { email?: string | null; detail?: string | null } = {},
@@ -242,9 +239,9 @@ export function registerOauthRoutes(app: FastifyInstance) {
       }
       // Where the flow started wins over who happens to be logged in, so an
       // admin testing their own connect link sees what the recipient sees.
-      if (verifiedState?.hubToken) {
+      if (verifiedState?.returnToken) {
         return reply.redirect(
-          hubResultUrl(verifiedState.hubToken, outcomeCode, {
+          connectResultUrl(verifiedState.returnToken, outcomeCode, {
             email: ctx.email,
             detail: ctx.detail,
           }),
@@ -373,13 +370,13 @@ export function registerOauthRoutes(app: FastifyInstance) {
   });
 }
 
-function hubResultUrl(
-  hubToken: string,
+function connectResultUrl(
+  token: string,
   status: OutcomeCode,
   ctx: { email?: string | null; detail?: string | null } = {},
 ): string {
   const url = new URL(`${config.BASE_URL.replace(/\/$/, '')}/connect`);
-  url.searchParams.set('token', hubToken);
+  url.searchParams.set('token', token);
   url.searchParams.set('status', status);
   if (ctx.email) url.searchParams.set('email', ctx.email);
   if (ctx.detail) url.searchParams.set('detail', ctx.detail.slice(0, 300));

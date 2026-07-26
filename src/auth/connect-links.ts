@@ -104,6 +104,9 @@ export function verifyConnectToken(token: string, provider?: ProviderName): Toke
       return { ok: false, reason: 'malformed' };
     }
     if (expiresAtMs < Date.now()) return { ok: false, reason: 'expired' };
+    // Legacy tokens carry no version, so revocation would slip past them.
+    // Any revocation at all retires the whole pre-v2 generation.
+    if (connectLinkVersion(orgId) !== 0) return { ok: false, reason: 'revoked' };
     return { ok: true, orgId, scope: provider, token };
   }
 
@@ -133,9 +136,9 @@ export function verifyConnectToken(token: string, provider?: ProviderName): Toke
 // OAuth `state` is signed the same way rather than mirrored into a cookie: one
 // connect link is routinely opened several times (and in several tabs at once)
 // to add several mailboxes, and a single-slot state cookie makes every flow but
-// the newest fail. The signature carries the org, the hub token to return to
-// (so the next mailbox is one click away), and its own expiry, so concurrent
-// and slow consent screens both work.
+// the newest fail. The signature carries the org, the connect token to return
+// to (so the next mailbox is one click away), and its own expiry, so
+// concurrent and slow consent screens both work.
 const STATE_TTL_MS = 30 * 60_000;
 // Connect tokens contain '.', so state fields are joined with a character that
 // cannot appear in a nanoid, a hex digest, or a scope name.
@@ -145,42 +148,42 @@ function signState(
   provider: ProviderName,
   nonce: string,
   orgId: string,
-  hubToken: string,
+  returnToken: string,
   expiresAtMs: number,
 ): string {
-  return hmac(`oauth-state:${provider}:${nonce}:${orgId}:${hubToken}:${expiresAtMs}`);
+  return hmac(`oauth-state:${provider}:${nonce}:${orgId}:${returnToken}:${expiresAtMs}`);
 }
 
 export function createOauthState(
   provider: ProviderName,
   orgId: string,
-  hubToken: string | null,
+  returnToken: string | null,
 ): string {
   const nonce = crypto.randomBytes(16).toString('hex');
   const expiresAtMs = Date.now() + STATE_TTL_MS;
-  const hub = hubToken ?? '';
+  const ret = returnToken ?? '';
   return [
     nonce,
     orgId,
-    hub,
+    ret,
     String(expiresAtMs),
-    signState(provider, nonce, orgId, hub, expiresAtMs),
+    signState(provider, nonce, orgId, ret, expiresAtMs),
   ].join(STATE_SEP);
 }
 
 export function verifyOauthState(
   provider: ProviderName,
   state: string,
-): { orgId: string; hubToken: string | null } | null {
+): { orgId: string; returnToken: string | null } | null {
   const parts = state.split(STATE_SEP);
   if (parts.length !== 5) return null;
   const nonce = parts[0] ?? '';
   const orgId = parts[1] ?? '';
-  const hub = parts[2] ?? '';
+  const ret = parts[2] ?? '';
   const sig = parts[4] ?? '';
   if (!nonce || !orgId || !sig) return null;
   const expiresAtMs = Number(parts[3]);
   if (!Number.isFinite(expiresAtMs) || expiresAtMs < Date.now()) return null;
-  if (!sameSig(sig, signState(provider, nonce, orgId, hub, expiresAtMs))) return null;
-  return { orgId, hubToken: hub || null };
+  if (!sameSig(sig, signState(provider, nonce, orgId, ret, expiresAtMs))) return null;
+  return { orgId, returnToken: ret || null };
 }

@@ -61,18 +61,41 @@ describe('tenancy', () => {
     const { createOauthState, verifyOauthState } = await import('../auth/connect-links.js');
     // Two mailboxes being added at the same time from the same link: both
     // states must stay valid (no single-slot cookie to overwrite).
-    const first = createOauthState('google', orgA, 'hub-token');
-    const second = createOauthState('google', orgA, 'hub-token');
+    const first = createOauthState('google', orgA, 'link-token');
+    const second = createOauthState('google', orgA, 'link-token');
     expect(first).not.toBe(second);
-    expect(verifyOauthState('google', first)).toEqual({ orgId: orgA, hubToken: 'hub-token' });
-    expect(verifyOauthState('google', second)).toEqual({ orgId: orgA, hubToken: 'hub-token' });
+    expect(verifyOauthState('google', first)).toEqual({ orgId: orgA, returnToken: 'link-token' });
+    expect(verifyOauthState('google', second)).toEqual({ orgId: orgA, returnToken: 'link-token' });
     expect(verifyOauthState('microsoft', first)).toBeNull(); // provider-bound
     expect(verifyOauthState('google', first.replace(orgA, 'org_other'))).toBeNull();
     expect(verifyOauthState('google', 'garbage')).toBeNull();
     expect(verifyOauthState('google', createOauthState('google', orgA, null))).toEqual({
       orgId: orgA,
-      hubToken: null,
+      returnToken: null,
     });
+  });
+
+  it('retires pre-v2 links when links are revoked', async () => {
+    const crypto = await import('node:crypto');
+    const { revokeConnectLinks, verifyConnectToken } = await import('../auth/connect-links.js');
+    const { createOrgWithOwner } = await import('../tenancy/orgs.js');
+    const { config } = await import('../config.js');
+    const orgC = createOrgWithOwner({
+      orgName: 'C',
+      email: 'c@c.test',
+      password: 'password-abc',
+    }).orgId;
+    // A link in the shape minted before link versioning existed
+    const expiry = Date.now() + 3600_000;
+    const sig = crypto
+      .createHmac('sha256', config.masterKey)
+      .update(`connect-link:google:${orgC}:${expiry}`)
+      .digest('hex');
+    const legacy = `${orgC}.${expiry}.${sig}`;
+    expect(verifyConnectToken(legacy, 'google')).toMatchObject({ ok: true, orgId: orgC });
+    revokeConnectLinks(orgC);
+    // Revocation has to be total, or a leaked old link outlives it
+    expect(verifyConnectToken(legacy, 'google')).toEqual({ ok: false, reason: 'revoked' });
   });
 
   it('rejects partial consent grants', async () => {
