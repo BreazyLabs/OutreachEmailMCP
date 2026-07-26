@@ -2,10 +2,12 @@
 <%- include('_header', { error: null }) %>
 <div style="max-width:560px; margin:6vh auto;">
 
+  <%# email_off stops Cloudflare rewriting mailbox addresses into
+      "[email protected]" placeholders that only decode with JS enabled. %>
   <% if (outcome) { %>
     <div class="card" style="border-left:4px solid var(--<%= outcome.tone === 'ok' ? 'ok' : 'err' %>)">
       <h2 style="margin:0 0 0.4rem"><%= outcome.tone === 'ok' ? '✅' : '⚠️' %> <%= outcome.title %></h2>
-      <p style="margin:0 0 0.5rem"><%= outcome.detail %></p>
+      <!--email_off--><p style="margin:0 0 0.5rem"><%= outcome.detail %></p><!--/email_off-->
       <% if (outcome.fix) { %><p class="muted" style="margin:0"><strong>Next:</strong> <%= outcome.fix %></p><% } %>
     </div>
   <% } %>
@@ -42,6 +44,7 @@
     <% if (accounts.length) { %>
     <div class="card">
       <h2 style="margin:0 0 0.6rem">Already connected</h2>
+      <!--email_off-->
       <table>
         <% for (const a of accounts) { %>
         <tr>
@@ -50,6 +53,7 @@
         </tr>
         <% } %>
       </table>
+      <!--/email_off-->
       <p class="muted" style="margin:0.7rem 0 0">A mailbox listed here does not need connecting again. Re-connecting one only refreshes its access — it never creates a duplicate.</p>
     </div>
     <% } %>
