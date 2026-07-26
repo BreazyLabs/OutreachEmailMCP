@@ -94,15 +94,18 @@ export function verifyConnectToken(token: string, provider?: ProviderName): Toke
   const parts = token.split('.');
 
   // Pre-v2 form: <orgId>.<expiryMs>.<hmac>, only ever minted per-provider.
+  // The provider is inside the signature and not in the token, so when the
+  // caller has no provider in hand (the connect page, which any link may
+  // return to) each one is tried and the match decides the scope.
   if (parts.length === 3) {
-    if (!provider) return { ok: false, reason: 'malformed' };
     const orgId = parts[0] ?? '';
     const expiresAtMs = Number(parts[1]);
     const sig = parts[2] ?? '';
     if (!orgId || !sig || !Number.isFinite(expiresAtMs)) return { ok: false, reason: 'malformed' };
-    if (!sameSig(sig, signLegacy(provider, orgId, expiresAtMs))) {
-      return { ok: false, reason: 'malformed' };
-    }
+    const candidates: ProviderName[] = provider ? [provider] : ['google', 'microsoft'];
+    const matched = candidates.find((p) => sameSig(sig, signLegacy(p, orgId, expiresAtMs)));
+    if (!matched) return { ok: false, reason: 'malformed' };
+    provider = matched;
     if (expiresAtMs < Date.now()) return { ok: false, reason: 'expired' };
     // Legacy tokens carry no version, so revocation would slip past them.
     // Any revocation at all retires the whole pre-v2 generation.

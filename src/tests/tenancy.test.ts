@@ -93,6 +93,14 @@ describe('tenancy', () => {
       .digest('hex');
     const legacy = `${orgC}.${expiry}.${sig}`;
     expect(verifyConnectToken(legacy, 'google')).toMatchObject({ ok: true, orgId: orgC });
+    // The connect page has no provider in hand and must still resolve it,
+    // otherwise a link already in circulation dead-ends on its result page
+    expect(verifyConnectToken(legacy)).toMatchObject({
+      ok: true,
+      orgId: orgC,
+      scope: 'google',
+    });
+    expect(verifyConnectToken(legacy, 'microsoft')).toEqual({ ok: false, reason: 'malformed' });
     revokeConnectLinks(orgC);
     // Revocation has to be total, or a leaked old link outlives it
     expect(verifyConnectToken(legacy, 'google')).toEqual({ ok: false, reason: 'revoked' });
