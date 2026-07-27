@@ -16,6 +16,7 @@ import { registerSsoRoutes } from './auth/sso.js';
 import { registerOauthRoutes } from './auth/oauth-routes.js';
 import { startTokenRefreshSweep } from './auth/tokens.js';
 import { startActivityPruner } from './observability/activity.js';
+import { startHealthReporter } from './observability/healthcheck.js';
 import { registerUiRoutes } from './ui/routes.js';
 import { apiKeyAuth, registerApiErrorHandler } from './api/plugin.js';
 import { registerAccountRoutes } from './api/accounts.js';
@@ -84,12 +85,14 @@ async function main() {
   const stopPoller = startInboundPoller();
   startTokenRefreshSweep();
   startActivityPruner();
+  const stopHealthReporter = startHealthReporter();
 
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'shutting down');
     stopSendWorker();
     stopWebhookWorker();
     stopPoller();
+    stopHealthReporter();
     for (const server of smtpServers) server.close(() => {});
     for (const server of imapServers) server.close(() => {});
     await app.close();

@@ -39,6 +39,9 @@ services:
       SMTP_TLS_CERT: ${SMTP_TLS_CERT:-}
       SMTP_TLS_KEY: ${SMTP_TLS_KEY:-}
       MAIL_HOST: ${MAIL_HOST:-}
+      HEALTH_REPORT_TO: ${HEALTH_REPORT_TO:-}
+      HEALTH_REPORT_HOUR: ${HEALTH_REPORT_HOUR:-7}
+      HEALTH_REPORT_ALWAYS: ${HEALTH_REPORT_ALWAYS:-false}
     volumes:
       # Everything lives here: SQLite DB (accounts, encrypted tokens, queue),
       # message spool, TLS certs. Back this volume up.

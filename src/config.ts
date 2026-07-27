@@ -61,6 +61,13 @@ const envSchema = z.object({
   // expires; the dashboard's hub link is non-expiring and revocable instead).
   CONNECT_LINK_TTL_HOURS: z.coerce.number().int().min(0).default(168),
 
+  // Daily health check: hour of the day (UTC) to run it, who to mail the
+  // report to (comma-separated; defaults to each workspace's owners), and
+  // whether to send even when nothing is wrong.
+  HEALTH_REPORT_HOUR: z.coerce.number().int().min(0).max(23).default(7),
+  HEALTH_REPORT_TO: z.string().optional(),
+  HEALTH_REPORT_ALWAYS: boolFromEnv,
+
   // How long transaction/audit log rows are kept
   ACTIVITY_RETENTION_DAYS: z.coerce.number().int().min(1).default(30),
   LOG_LEVEL: z.string().default('info'),

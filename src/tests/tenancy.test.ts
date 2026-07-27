@@ -182,6 +182,36 @@ describe('tenancy', () => {
     expect(() => assertCanSend(orgA)).toThrow(QuotaError);
   });
 
+  it('reports unhealthy mailboxes in the daily check', async () => {
+    const { runHealthCheck, renderHealthReportText } = await import(
+      '../observability/healthcheck.js'
+    );
+    const { getOrg } = await import('../tenancy/orgs.js');
+    const { db, schema } = await import('../db/index.js');
+    const { nanoid } = await import('nanoid');
+    const now = Date.now();
+    db.insert(schema.accounts)
+      .values({
+        id: nanoid(),
+        orgId: orgA,
+        provider: 'microsoft',
+        email: 'broken@test.com',
+        status: 'auth_error',
+        lastError: 'refresh token revoked',
+        createdAt: now,
+        updatedAt: now,
+      })
+      .run();
+
+    const report = await runHealthCheck(getOrg(orgA)!, false);
+    const critical = report.findings.filter((f) => f.severity === 'critical');
+    expect(critical.some((f) => f.title.includes('broken@test.com'))).toBe(true);
+    // The reason has to survive into the email, not just the log
+    const text = renderHealthReportText(report);
+    expect(text).toContain('CRITICAL');
+    expect(text).toContain('refresh token revoked');
+  });
+
   it('scopes quota counting to the org', async () => {
     const { assertCanSend, createOrgWithOwner } = await import('../tenancy/orgs.js');
     const orgB = createOrgWithOwner({
