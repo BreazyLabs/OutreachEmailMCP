@@ -10,6 +10,7 @@ export type OutcomeCode =
   | 'denied'
   | 'missing_scopes'
   | 'no_refresh_token'
+  | 'no_mailbox'
   | 'other_workspace'
   | 'quota'
   | 'suspended'
@@ -40,6 +41,7 @@ const OUTCOMES = new Set<OutcomeCode>([
   'denied',
   'missing_scopes',
   'no_refresh_token',
+  'no_mailbox',
   'other_workspace',
   'quota',
   'suspended',
@@ -111,6 +113,22 @@ export function describeOutcome(code: OutcomeCode, ctx: OutcomeContext = {}): Co
           ctx.provider === 'microsoft'
             ? 'Remove this app under myapps.microsoft.com → your account → app permissions, then connect again.'
             : 'Remove this app at myaccount.google.com/permissions, then connect again.',
+        canRetry: true,
+      };
+    case 'no_mailbox':
+      return {
+        code,
+        tone: 'error',
+        title: 'That account has no mailbox',
+        detail: `Sign-in worked, but ${mailbox(ctx)} has no mailbox behind it${
+          ctx.provider === 'microsoft'
+            ? ' — usually a Microsoft user without an Exchange Online licence, or a mailbox still hosted on-premise'
+            : ' — the Google account does not have Gmail switched on'
+        }. It was not connected, because it could never send or receive.`,
+        fix:
+          ctx.provider === 'microsoft'
+            ? 'Sign in as the mailbox itself rather than a tenant admin account, or have an admin assign it a Microsoft 365 licence with Exchange Online, then try again.'
+            : 'Use a Google account that has Gmail enabled, then try again.',
         canRetry: true,
       };
     case 'other_workspace':

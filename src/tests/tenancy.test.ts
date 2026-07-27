@@ -106,6 +106,24 @@ describe('tenancy', () => {
     expect(verifyConnectToken(legacy, 'google')).toEqual({ ok: false, reason: 'revoked' });
   });
 
+  it('recognises an identity with no mailbox behind it', async () => {
+    const { isMailboxUnavailable } = await import('../providers/errors.js');
+    // What Graph actually returns for an unlicensed Microsoft 365 user
+    expect(
+      isMailboxUnavailable(
+        new Error(
+          'Graph GET https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta: HTTP 404 {"error":{"code":"MailboxNotEnabledForRESTAPI","message":"The mailbox is either inactive, soft-deleted, or is hosted on-premise."}}',
+        ),
+      ),
+    ).toBe(true);
+    expect(isMailboxUnavailable(new Error('HTTP 400 {"error":{"status":"failedPrecondition"}}'))).toBe(
+      true,
+    );
+    // Ordinary failures must not be mistaken for a missing mailbox
+    expect(isMailboxUnavailable(new Error('HTTP 429 rate limited'))).toBe(false);
+    expect(isMailboxUnavailable(new Error('HTTP 401 invalid token'))).toBe(false);
+  });
+
   it('rejects partial consent grants', async () => {
     const { missingScopes } = await import('../providers/oauth.js');
     const full =

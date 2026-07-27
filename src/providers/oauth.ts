@@ -1,5 +1,5 @@
 import { config } from '../config.js';
-import { AuthError, RetryableError } from './errors.js';
+import { AuthError, isMailboxUnavailable, RetryableError } from './errors.js';
 
 export type ProviderName = 'google' | 'microsoft';
 
@@ -161,6 +161,34 @@ export function refreshTokenGrant(
     grant_type: 'refresh_token',
     refresh_token: refreshToken,
   });
+}
+
+// Cheapest call that proves a real mailbox sits behind the identity that just
+// consented. Sign-in and /me succeed for an unlicensed Microsoft user or a
+// Gmail-less Google account, so without this a mailbox connects, looks
+// healthy, and then fails every poll and every send forever.
+export async function mailboxIsReachable(
+  provider: ProviderName,
+  accessToken: string,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const url =
+    provider === 'google'
+      ? 'https://gmail.googleapis.com/gmail/v1/users/me/profile'
+      : 'https://graph.microsoft.com/v1.0/me/mailFolders/inbox';
+  let res: Response;
+  try {
+    res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+  } catch {
+    // Network trouble is not evidence of a missing mailbox — let it through
+    // rather than blocking a connect on a blip.
+    return { ok: true };
+  }
+  if (res.ok) return { ok: true };
+  const body = await res.text().catch(() => '');
+  if (isMailboxUnavailable(`HTTP ${res.status} ${body}`)) {
+    return { ok: false, reason: `HTTP ${res.status} ${body.slice(0, 200)}` };
+  }
+  return { ok: true };
 }
 
 export async function fetchUserProfile(

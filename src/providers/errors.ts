@@ -12,6 +12,24 @@ export class PermanentError extends Error {
   readonly kind = 'permanent';
 }
 
+// The account authenticates fine but has no usable mailbox behind it — a
+// Microsoft identity with no Exchange Online licence (or an on-premise
+// mailbox), or a Google account with Gmail switched off. Retrying never helps
+// and the fix is always on the provider's side, so this is worth telling the
+// person apart from every other failure.
+const NO_MAILBOX_SIGNALS = [
+  'MailboxNotEnabledForRESTAPI', // Graph: unlicensed, inactive, or on-prem
+  'MailboxNotHostedInExchangeOnline',
+  'ResourceNotFound: Mailbox',
+  'failedPrecondition', // Gmail API when the account has no Gmail
+  'Mail service not enabled',
+];
+
+export function isMailboxUnavailable(err: unknown): boolean {
+  const text = err instanceof Error ? err.message : String(err);
+  return NO_MAILBOX_SIGNALS.some((s) => text.includes(s));
+}
+
 export async function throwForResponse(res: Response, context: string): Promise<never> {
   let detail = '';
   try {

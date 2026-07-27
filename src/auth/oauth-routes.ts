@@ -7,6 +7,7 @@ import {
   buildAuthUrl,
   exchangeCode,
   fetchUserProfile,
+  mailboxIsReachable,
   missingScopes,
   type ProviderName,
 } from '../providers/oauth.js';
@@ -213,6 +214,15 @@ export function registerOauthRoutes(app: FastifyInstance) {
         }
         throw err;
       }
+      // Recorded so "did they even get to the consent screen?" is answerable
+      // from the activity log — an abandoned consent never comes back to us.
+      logActivity({
+        category: 'oauth',
+        action: 'consent-open',
+        status: 'ok',
+        orgId,
+        detail: `${provider} consent screen opened${returnToken ? ' from a connect link' : ''}`,
+      });
       return reply.redirect(buildAuthUrl(provider, createOauthState(provider, orgId, returnToken)));
     },
   );
@@ -280,6 +290,14 @@ export function registerOauthRoutes(app: FastifyInstance) {
       if (missing.length) return finish('missing_scopes', { detail: missing.join(', ') });
 
       const profile = await fetchUserProfile(provider, tokens.accessToken);
+
+      // Consent can succeed for an identity that owns no mailbox. Catch it
+      // here rather than letting it become an account that polls and sends
+      // into a 404 forever.
+      const reachable = await mailboxIsReachable(provider, tokens.accessToken);
+      if (!reachable.ok) {
+        return finish('no_mailbox', { email: profile.email, detail: reachable.reason });
+      }
       const now = Date.now();
 
       const existing = db

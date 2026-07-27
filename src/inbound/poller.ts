@@ -7,6 +7,7 @@ import { logger } from '../logger.js';
 import { dispatchEvent } from './webhooks.js';
 import { indexMessage } from '../imap/index-store.js';
 import { logActivity } from '../observability/activity.js';
+import { isMailboxUnavailable } from '../providers/errors.js';
 import type { Account } from '../db/schema.js';
 
 async function pollAccount(account: Account): Promise<void> {
@@ -103,6 +104,20 @@ async function tick(): Promise<void> {
           .set({ lastPolledAt: Date.now(), lastError: String(err).slice(0, 500) })
           .where(eq(schema.syncState.accountId, account.id))
           .run();
+        // An account with no mailbox behind it can never recover on its own,
+        // so park it with the reason instead of failing every minute forever.
+        if (isMailboxUnavailable(err)) {
+          db.update(schema.accounts)
+            .set({
+              status: 'disabled',
+              lastError:
+                'No mailbox behind this account (unlicensed, on-premise, or mail not enabled). Reconnect once the provider side is fixed.',
+              updatedAt: Date.now(),
+            })
+            .where(eq(schema.accounts.id, account.id))
+            .run();
+          logger.warn({ account: account.email }, 'account has no mailbox; polling disabled');
+        }
         logger.warn({ account: account.email, err: String(err) }, 'inbound poll failed');
         logActivity({
           category: 'poll',
