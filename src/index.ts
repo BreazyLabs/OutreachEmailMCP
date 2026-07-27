@@ -77,8 +77,8 @@ async function main() {
     'http server listening',
   );
 
-  const smtpServer = startSmtpServer();
-  const imapServer = startImapServer();
+  const smtpServers = startSmtpServer();
+  const imapServers = startImapServer();
   const stopSendWorker = startSendWorker();
   const stopWebhookWorker = startWebhookWorker();
   const stopPoller = startInboundPoller();
@@ -90,8 +90,8 @@ async function main() {
     stopSendWorker();
     stopWebhookWorker();
     stopPoller();
-    smtpServer.close(() => {});
-    imapServer.close(() => {});
+    for (const server of smtpServers) server.close(() => {});
+    for (const server of imapServers) server.close(() => {});
     await app.close();
     process.exit(0);
   };

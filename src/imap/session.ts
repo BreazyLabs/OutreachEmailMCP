@@ -90,9 +90,12 @@ export class ImapSession {
   constructor(
     socket: net.Socket,
     private readonly tlsMaterial: TlsMaterial,
+    // True on the implicit-TLS listener, where the socket is already
+    // encrypted and STARTTLS must not be offered.
+    alreadySecure = false,
   ) {
     this.socket = socket;
-    this.secure = false;
+    this.secure = alreadySecure;
     this.attach(socket);
     imapIndexEvents.on('indexed', this.onIndexed);
     this.write(`* OK [CAPABILITY ${this.capabilities()}] OutreachEmailMCP IMAP ready${CRLF}`);

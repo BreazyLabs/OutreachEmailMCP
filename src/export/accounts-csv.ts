@@ -57,8 +57,12 @@ export function collectExportRows(orgId: string): AccountExportRow[] {
       provider: account.provider,
       status: account.status,
       host,
-      smtpPort: config.SMTP_PORT,
-      imapPort: config.IMAP_PORT,
+      // Advertise the implicit-TLS ports when they are enabled: sequencers
+      // overwhelmingly assume SSL-on-connect for mail ports, and pointing them
+      // at the STARTTLS listener fails deep inside their TLS stack with an
+      // error nobody can act on ("wrong version number").
+      smtpPort: config.SMTPS_PORT > 0 ? config.SMTPS_PORT : config.SMTP_PORT,
+      imapPort: config.IMAPS_PORT > 0 ? config.IMAPS_PORT : config.IMAP_PORT,
       username,
       password,
     });

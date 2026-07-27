@@ -1,5 +1,5 @@
 import { SMTPServer, type SMTPServerSession } from 'smtp-server';
-import { verifyProxyCredential } from './credentials.js';
+import { smtpAdvertisedHost, verifyProxyCredential } from './credentials.js';
 import { providerFor } from '../providers/index.js';
 import { QuotaError } from '../tenancy/orgs.js';
 import { enqueueSend } from '../queue/sendQueue.js';
@@ -21,12 +21,22 @@ function smtpError(message: string, code: number): Error & { responseCode: numbe
   return err;
 }
 
-export function startSmtpServer(): SMTPServer {
+// Started twice: STARTTLS on SMTP_PORT (587-style) and implicit TLS on
+// SMTPS_PORT (465-style). Sequencers split roughly evenly between the two
+// conventions, and guessing wrong shows up as an opaque TLS handshake error.
+export function startSmtpServer(): SMTPServer[] {
+  const servers = [buildSmtpServer(false)];
+  if (config.SMTPS_PORT > 0) servers.push(buildSmtpServer(true));
+  return servers;
+}
+
+function buildSmtpServer(implicitTls: boolean): SMTPServer {
   const tls = loadTlsMaterial();
+  const port = implicitTls ? config.SMTPS_PORT : config.SMTP_PORT;
   const server = new SMTPServer({
-    name: new URL(config.BASE_URL).hostname,
+    name: smtpAdvertisedHost(),
     banner: 'OutreachEmailMCP',
-    secure: false,
+    secure: implicitTls,
     key: tls.key,
     cert: tls.cert,
     size: config.SMTP_MAX_SIZE,
@@ -136,8 +146,11 @@ export function startSmtpServer(): SMTPServer {
   });
 
   server.on('error', (err) => logger.warn({ err: String(err) }, 'smtp server error'));
-  server.listen(config.SMTP_PORT, config.SMTP_BIND, () => {
-    logger.info({ port: config.SMTP_PORT, bind: config.SMTP_BIND }, 'smtp server listening');
+  server.listen(port, config.SMTP_BIND, () => {
+    logger.info(
+      { port, bind: config.SMTP_BIND, tls: implicitTls ? 'implicit' : 'starttls' },
+      'smtp server listening',
+    );
   });
   return server;
 }

@@ -25,6 +25,8 @@ const envSchema = z.object({
   HTTP_BIND: z.string().default('127.0.0.1'),
 
   SMTP_PORT: z.coerce.number().int().default(2525),
+  // Implicit-TLS (SMTPS, 465-style) listener; 0 disables it.
+  SMTPS_PORT: z.coerce.number().int().min(0).default(465),
   SMTP_BIND: z.string().default('127.0.0.1'),
   SMTP_MAX_SIZE: z.coerce.number().int().default(25 * 1024 * 1024),
   SMTP_ALLOW_INSECURE_AUTH: boolFromEnv,
@@ -36,6 +38,8 @@ const envSchema = z.object({
   MAIL_HOST: z.string().optional(),
 
   IMAP_PORT: z.coerce.number().int().default(1143),
+  // Implicit-TLS (IMAPS, 993-style) listener; 0 disables it.
+  IMAPS_PORT: z.coerce.number().int().min(0).default(993),
   IMAP_BIND: z.string().default('127.0.0.1'),
   IMAP_ALLOW_INSECURE_AUTH: boolFromEnv,
   // How many recent INBOX messages to index per account on first IMAP use

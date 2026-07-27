@@ -15,6 +15,10 @@ services:
       # proxy like Traefik does not route them by default).
       - "${SMTP_PUBLISH_PORT:-2525}:2525"
       - "${IMAP_PUBLISH_PORT:-1143}:1143"
+      # Implicit-TLS variants (465/993). Most sequencers assume SSL-on-connect
+      # for mail ports, so these are what the CSV export advertises.
+      - "${SMTPS_PUBLISH_PORT:-465}:465"
+      - "${IMAPS_PUBLISH_PORT:-993}:993"
     environment:
       MASTER_KEY: ${MASTER_KEY:?Set MASTER_KEY (openssl rand -base64 32)}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD}
