@@ -1,0 +1,1 @@
+ALTER TABLE `ui_sessions` ADD `acting_org_id` text;

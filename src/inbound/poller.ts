@@ -5,6 +5,8 @@ import { providerFor } from '../providers/index.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { dispatchEvent } from './webhooks.js';
+import { classifyInbound } from './classify.js';
+import { findSendJobByMessageId, recordBounce, recordReply } from './correlate.js';
 import { indexMessage } from '../imap/index-store.js';
 import { logActivity } from '../observability/activity.js';
 import { isMailboxUnavailable } from '../providers/errors.js';
@@ -39,6 +41,30 @@ async function pollAccount(account: Account): Promise<void> {
       const raw = await provider.getMessageRaw(account.id, messageId);
       const parsed = await simpleParser(raw);
       indexMessage(account.id, messageId, raw, parsed);
+
+      // Delivery outcomes ride in on ordinary inbound mail: a DSN is the only
+      // notice a bounce ever gets, and a reply is just mail that references
+      // what we sent. Both still fire message.received as well — consumers
+      // that only care about the mailbox should not have to know about this.
+      const classified = classifyInbound(parsed, raw.toString());
+      if (classified.kind === 'bounce') {
+        const job = findSendJobByMessageId(account.id, classified.originalMessageId);
+        if (job) recordBounce(account, job, classified);
+        else
+          logger.info(
+            { account: account.email, messageId, code: classified.code },
+            'bounce received for an unknown send (not sent through this proxy)',
+          );
+      } else if (classified.kind === 'reply') {
+        const job = findSendJobByMessageId(account.id, classified.inReplyTo);
+        if (job)
+          recordReply(account, job, {
+            messageId,
+            from: parsed.from?.text ?? null,
+            snippet: (parsed.text ?? '').trim().slice(0, 200) || null,
+          });
+      }
+
       const count = dispatchEvent(
         {
           event: 'message.received',

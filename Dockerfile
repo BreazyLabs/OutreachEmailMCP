@@ -6,6 +6,15 @@ FROM node:22-slim
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
+# Breazy's private CA, which issues the *.internal certificates. Without it the
+# browser half of the Pocket ID login succeeds and the server-side token
+# exchange fails with a bare "fetch failed" and no certificate wording at all.
+# It must be a real environment variable, not a .env entry: Node's TLS layer
+# reads it at process start, before any app code runs. Public CAs are
+# untouched — this appends, it does not replace the bundle.
+COPY certs/breazy-root.crt /etc/ssl/breazy-root.crt
+ENV NODE_EXTRA_CA_CERTS=/etc/ssl/breazy-root.crt
+
 WORKDIR /app
 
 COPY package.json package-lock.json ./

@@ -55,6 +55,9 @@
     .btn-google { background:#131314; color:#e3e3e3; border-color:#3c3f43; }
     .btn-google:hover { background:#1b1c1e; }
   }
+  .btn-passkey { display:flex; align-items:center; justify-content:center; gap:0.7rem; width:100%; background:var(--accent); color:#fff; border:none; border-radius:8px; padding:0.72rem; font-size:0.95rem; font-weight:600; text-decoration:none; transition:filter 0.12s; }
+  .btn-passkey:hover { filter:brightness(1.08); }
+  .auth-hint { text-align:center; color:var(--muted); font-size:0.8rem; margin:0.9rem 0 0; }
 </style>
 </head>
 <body>
@@ -69,10 +72,26 @@
   <% if (typeof saasMode !== 'undefined' && saasMode) { %>
   <a href="/ui/billing" class="<%= page === 'billing' ? 'active' : '' %>">Billing</a>
   <% } %>
+  <% if (typeof superuser !== 'undefined' && superuser) { %>
+  <form method="post" action="/ui/workspace/switch" style="margin-left:auto; display:flex; gap:0.4rem; align-items:center">
+    <input type="hidden" name="_csrf" value="<%= csrf %>">
+    <span class="badge active" title="Platform access: every workspace on this instance">super</span>
+    <select name="orgId" onchange="this.form.submit()">
+      <% (typeof orgs !== 'undefined' ? orgs : []).forEach(function (o) { %>
+      <option value="<%= o.id %>" <%= typeof orgName !== 'undefined' && o.name === orgName ? 'selected' : '' %>><%= o.name %> (<%= o.accounts %>)</option>
+      <% }) %>
+    </select>
+    <a class="btn secondary" href="/ui/workspace/new">+ Workspace</a>
+  </form>
+  <form method="post" action="/ui/logout">
+    <button class="secondary" type="submit">Log out</button>
+  </form>
+  <% } else { %>
   <form method="post" action="/ui/logout">
     <% if (typeof orgName !== 'undefined' && orgName && typeof saasMode !== 'undefined' && saasMode) { %><span class="muted" style="margin-right:0.8rem"><%= orgName %></span><% } %>
     <button class="secondary" type="submit">Log out</button>
   </form>
+  <% } %>
 </nav>
 <% } %>
 <main>

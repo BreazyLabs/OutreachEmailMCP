@@ -1,6 +1,7 @@
 node_modules/
 dist/
 data/
+data-dev/
 data-test/
 .env
 *.log

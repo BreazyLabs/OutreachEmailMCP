@@ -13,6 +13,8 @@ import { seedTenancy } from './tenancy/orgs.js';
 import { registerBillingRoutes } from './billing/stripe.js';
 import { registerMcpRoutes } from './mcp/server.js';
 import { registerSsoRoutes } from './auth/sso.js';
+import { registerPartnerSsoRoutes } from './auth/partner-sso.js';
+import { registerPocketIdRoutes } from './auth/pocket-id.js';
 import { registerOauthRoutes } from './auth/oauth-routes.js';
 import { startTokenRefreshSweep } from './auth/tokens.js';
 import { startActivityPruner } from './observability/activity.js';
@@ -24,6 +26,8 @@ import { registerSendRoutes } from './api/messages-send.js';
 import { registerReadRoutes } from './api/messages-read.js';
 import { registerSendLogRoutes } from './api/send-log.js';
 import { registerWebhookRoutes } from './api/webhooks.js';
+import { registerStatsRoutes } from './api/stats.js';
+import { registerProvisioningRoutes } from './api/provisioning.js';
 import { startSendWorker } from './queue/worker.js';
 import { startSmtpServer } from './smtp/server.js';
 import { startImapServer } from './imap/server.js';
@@ -59,6 +63,8 @@ async function main() {
   registerBillingRoutes(app);
   registerMcpRoutes(app);
   registerSsoRoutes(app);
+  registerPartnerSsoRoutes(app);
+  registerPocketIdRoutes(app);
 
   await app.register(
     async (api) => {
@@ -68,6 +74,17 @@ async function main() {
       registerReadRoutes(api);
       registerSendLogRoutes(api);
       registerWebhookRoutes(api);
+      registerStatsRoutes(api);
+    },
+    { prefix: '/api/v1' },
+  );
+
+  // Provisioning sits in its own scope: it authenticates with the instance's
+  // ADMIN_API_KEY rather than an org-scoped key, so it must not inherit the
+  // apiKeyAuth preHandler above.
+  await app.register(
+    async (admin) => {
+      registerProvisioningRoutes(admin);
     },
     { prefix: '/api/v1' },
   );

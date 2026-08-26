@@ -19,6 +19,7 @@ import { providerFor } from '../providers/index.js';
 import { ALL_SCOPES } from '../api/plugin.js';
 import { SEQUENCER_LABELS } from '../export/accounts-csv.js';
 import { ssoEnabled } from '../auth/sso.js';
+import { internalSsoAvailable } from '../auth/internal-network.js';
 import {
   createOrgWithOwner,
   countAccounts,
@@ -34,6 +35,8 @@ import {
   csrfTokenFor,
   verifyCsrf,
   type SessionContext,
+  setActingOrg,
+  allOrgs,
 } from './session.js';
 
 type Req = FastifyRequest;
@@ -61,7 +64,15 @@ function baseLocals(req: Req, session?: SessionContext | null) {
     saasMode: config.SAAS_MODE,
     stripeEnabled: config.stripeEnabled,
     ssoEnabled: ssoEnabled(),
+    // Pocket ID is offered only to traffic that actually came through the
+    // tailnet gateway — id.internal does not resolve anywhere else, so
+    // showing the button publicly would be a dead end.
+    internalSso: internalSsoAvailable(req),
     orgName: session?.org.name ?? null,
+    // Superadmins see every workspace and can switch between them; for
+    // everyone else these are absent and the nav renders as before.
+    superuser: session?.isSuperuser ?? false,
+    orgs: session?.isSuperuser ? allOrgs() : [],
     baseUrl: config.BASE_URL.replace(/\/$/, ''),
     error: (req.query as { error?: string }).error ?? null,
     notice: ((req.query as { notice?: string }).notice ?? null) as string | null,
@@ -125,6 +136,49 @@ export function registerUiRoutes(app: FastifyInstance) {
   app.post('/ui/logout', async (req, reply) => {
     destroyUiSession(req, reply);
     return reply.redirect('/ui/login');
+  });
+
+  /** Enter another workspace. Superadmins only — everyone else is pinned
+   *  to their own org and the control is not even rendered for them. */
+  app.post<{ Body: { orgId?: string } }>('/ui/workspace/switch', async (req, reply) => {
+    const session = guardPost(req, reply as Rep);
+    if (!session) return;
+    if (!session.isSuperuser) return reply.code(403).send('Not permitted');
+    const orgId = req.body?.orgId ?? null;
+    if (orgId && !db.select().from(schema.orgs).where(eq(schema.orgs.id, orgId)).get()) {
+      return reply.redirect('/ui?error=Unknown+workspace');
+    }
+    setActingOrg(req, orgId);
+    return reply.redirect('/ui');
+  });
+
+  app.get('/ui/workspace/new', async (req, reply) => {
+    const session = guard(req, reply as Rep);
+    if (!session) return;
+    if (!session.isSuperuser) return reply.code(403).send('Not permitted');
+    return reply.view('workspace-new.ejs', {
+      ...baseLocals(req, session),
+      page: 'dashboard',
+      title: 'New workspace',
+    });
+  });
+
+  app.post<{ Body: { name?: string } }>('/ui/workspace/new', async (req, reply) => {
+    const session = guardPost(req, reply as Rep);
+    if (!session) return;
+    if (!session.isSuperuser) return reply.code(403).send('Not permitted');
+    const name = (req.body?.name ?? '').trim();
+    if (!name) return reply.redirect('/ui/workspace/new?error=Name+is+required');
+    // Owner identity is synthetic: nobody signs into a superadmin-created
+    // workspace directly — it is reached through the switcher or an API key.
+    const { orgId } = createOrgWithOwner({
+      orgName: name,
+      email: `ws-${nanoid(10)}@platform.local`,
+      password: randomBase62(32),
+    });
+    db.update(schema.orgs).set({ plan: 'pro' }).where(eq(schema.orgs.id, orgId)).run();
+    setActingOrg(req, orgId);
+    return reply.redirect('/ui?notice=Workspace+created');
   });
 
   app.get('/ui', async (req, reply) => {

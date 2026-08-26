@@ -16,7 +16,12 @@ const SESSION_TTL_MS = 7 * 24 * 3600_000;
 
 export interface SessionContext {
   user: User;
+  /** The workspace this session is acting in. For a superadmin that is
+   *  whichever workspace they switched into; for everyone else it is their
+   *  own and cannot be changed. */
   org: Org;
+  /** Platform-level access: may enter and create any workspace. */
+  isSuperuser: boolean;
 }
 
 // Self-hosted mode: password-only login against the seeded admin user.
@@ -74,9 +79,44 @@ export function currentSession(req: FastifyRequest): SessionContext | null {
     .where(eq(schema.users.id, session.userId))
     .get();
   if (!user) return null;
-  const org = db.select().from(schema.orgs).where(eq(schema.orgs.id, user.orgId)).get();
+  const isSuperuser = user.role === 'superadmin';
+  // Only a superadmin may act outside their own workspace. A stale
+  // acting_org_id (workspace deleted, role revoked) silently falls back
+  // rather than logging the session out.
+  const targetOrgId =
+    isSuperuser && session.actingOrgId ? session.actingOrgId : user.orgId;
+  const org =
+    db.select().from(schema.orgs).where(eq(schema.orgs.id, targetOrgId)).get() ??
+    db.select().from(schema.orgs).where(eq(schema.orgs.id, user.orgId)).get();
   if (!org) return null;
-  return { user, org };
+  return { user, org, isSuperuser };
+}
+
+/** Enter another workspace. Superadmins only — the caller must have
+ *  established that; this writes the choice onto the session row. */
+export function setActingOrg(req: FastifyRequest, orgId: string | null): void {
+  const token = req.cookies[SESSION_COOKIE];
+  if (!token) return;
+  db.update(schema.uiSessions)
+    .set({ actingOrgId: orgId })
+    .where(eq(schema.uiSessions.tokenHash, hashSessionToken(token)))
+    .run();
+}
+
+/** Every workspace on the instance — the superadmin's switcher list. */
+export function allOrgs(): { id: string; name: string; accounts: number }[] {
+  const orgs = db.select().from(schema.orgs).all();
+  return orgs
+    .map((o) => ({
+      id: o.id,
+      name: o.name,
+      accounts: db
+        .select()
+        .from(schema.accounts)
+        .where(eq(schema.accounts.orgId, o.id))
+        .all().length,
+    }))
+    .sort((a, b) => b.accounts - a.accounts || a.name.localeCompare(b.name));
 }
 
 export function hasValidUiSession(req: FastifyRequest): boolean {

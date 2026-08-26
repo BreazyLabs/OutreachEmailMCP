@@ -20,6 +20,9 @@ const envSchema = z.object({
     }, 'MASTER_KEY must be 32 bytes of base64 (openssl rand -base64 32)'),
   BASE_URL: z.string().url().default('http://localhost:3000'),
   ADMIN_PASSWORD: z.string().min(1).default('change-me'),
+  // Bootstrap secret for the cross-tenant provisioning API (creating
+  // workspaces + minting their keys). Unset = that surface is disabled.
+  ADMIN_API_KEY: z.string().min(16).optional(),
 
   HTTP_PORT: z.coerce.number().int().default(3000),
   HTTP_BIND: z.string().default('127.0.0.1'),
@@ -44,6 +47,22 @@ const envSchema = z.object({
   IMAP_ALLOW_INSECURE_AUTH: boolFromEnv,
   // How many recent INBOX messages to index per account on first IMAP use
   IMAP_BACKFILL_COUNT: z.coerce.number().int().min(0).max(500).default(50),
+
+  // --- Internal (tailnet) sign-in via Pocket ID ---
+  // The hostname the shared nginx gateway serves this app under. Requests
+  // arriving with any other Host are treated as public, whatever they claim.
+  INTERNAL_HOSTNAME: z.string().default('emailproxy.internal'),
+  // Shared secret nginx stamps onto every internal request. Unset disables
+  // internal sign-in entirely — the check fails closed rather than open.
+  INTERNAL_GATEWAY_SECRET: z.string().optional(),
+  OIDC_ISSUER: z.string().url().default('https://id.internal'),
+  OIDC_CLIENT_ID: z.string().optional(),
+  OIDC_CLIENT_SECRET: z.string().optional(),
+  // Origin the OIDC redirect_uri is built from. Defaults to the internal
+  // hostname over https, which is how it is served in production; override it
+  // for local development (e.g. http://localhost:3111), where the same client
+  // works because both callbacks are registered on it.
+  INTERNAL_BASE_URL: z.string().url().optional(),
 
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
@@ -139,6 +158,18 @@ export const config = {
   messagesDir: path.resolve(process.cwd(), env.DATA_DIR, 'messages'),
   certsDir: path.resolve(process.cwd(), env.DATA_DIR, 'certs'),
   googleEnabled: Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET),
+  // All three are required: without the gateway secret an internal request is
+  // indistinguishable from a forged one, so the whole route stays off.
+  internalSsoConfigured: Boolean(
+    env.OIDC_CLIENT_ID && env.OIDC_CLIENT_SECRET && env.INTERNAL_GATEWAY_SECRET,
+  ),
+  // The origin the redirect URI registered with Pocket ID is built from.
+  // Pinned to the internal hostname rather than BASE_URL, which is the public
+  // one, unless explicitly overridden for local development.
+  internalBaseUrl: (env.INTERNAL_BASE_URL ?? `https://${env.INTERNAL_HOSTNAME}`).replace(
+    /\/$/,
+    '',
+  ),
   microsoftEnabled: Boolean(env.MICROSOFT_CLIENT_ID && env.MICROSOFT_CLIENT_SECRET),
   stripeEnabled: Boolean(
     env.SAAS_MODE && env.STRIPE_SECRET_KEY && env.STRIPE_WEBHOOK_SECRET && env.STRIPE_PRICE_PRO,

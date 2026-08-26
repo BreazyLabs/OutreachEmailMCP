@@ -1,0 +1,26 @@
+<%- include('_header', { page: page }) %>
+<main>
+  <h1>New workspace</h1>
+  <p class="muted">
+    A workspace owns its own mailboxes, API keys, webhooks and send log.
+    Nothing is shared between them — creating one here is how a new customer
+    gets an isolated place to connect inboxes.
+  </p>
+  <% if (error) { %><div class="card" style="border-color:var(--err)"><%= error %></div><% } %>
+  <form method="post" action="/ui/workspace/new" class="card">
+    <input type="hidden" name="_csrf" value="<%= csrf %>">
+    <label>
+      <div class="muted" style="margin-bottom:0.3rem">Workspace name</div>
+      <input name="name" placeholder="Acme Corp" autofocus style="min-width:20rem">
+    </label>
+    <div style="margin-top:0.9rem; display:flex; gap:0.5rem">
+      <button type="submit">Create workspace</button>
+      <a class="btn secondary" href="/ui">Cancel</a>
+    </div>
+  </form>
+  <p class="muted" style="font-size:0.85rem">
+    You are switched into the new workspace immediately. Use the switcher in
+    the nav to move between workspaces.
+  </p>
+</main>
+<%- include('_footer') %>

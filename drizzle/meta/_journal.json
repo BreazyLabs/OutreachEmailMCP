@@ -64,6 +64,27 @@
       "when": 1785102958946,
       "tag": "0008_neat_azazel",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1787677281786,
+      "tag": "0009_redundant_talkback",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1787757738864,
+      "tag": "0010_cold_black_tarantula",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1787763009184,
+      "tag": "0011_strange_shotgun",
+      "breakpoints": true
     }
   ]
 }

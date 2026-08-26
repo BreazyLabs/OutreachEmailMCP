@@ -29,6 +29,43 @@ export interface MessageReceivedPayload {
   };
 }
 
+/** Outcome events for mail WE sent. `message.sent`/`message.failed` fire from
+ *  the send queue; `message.bounced`/`message.replied` fire from the inbound
+ *  poller once a DSN or reply correlates back to the original send job. */
+export interface SendOutcomePayload {
+  event: 'message.sent' | 'message.failed' | 'message.bounced' | 'message.replied';
+  account: { id: string; email: string; provider: string };
+  send: {
+    jobId: string;
+    messageId: string | null;
+    providerMessageId: string | null;
+    subject: string | null;
+    to: string[];
+    /** message.failed only — why the provider rejected it. */
+    error?: string | null;
+    /** message.bounced only. */
+    bounce?: {
+      type: 'hard' | 'soft';
+      code: string | null;
+      recipient: string | null;
+      diagnostic: string | null;
+    };
+    /** message.replied only — the inbound message that replied. */
+    reply?: { messageId: string; from: string | null; snippet: string | null };
+  };
+}
+
+export type WebhookPayload = MessageReceivedPayload | SendOutcomePayload;
+
+/** Every event a webhook can subscribe to. */
+export const WEBHOOK_EVENTS = [
+  'message.received',
+  'message.sent',
+  'message.failed',
+  'message.bounced',
+  'message.replied',
+] as const;
+
 function isPrivateIp(ip: string): boolean {
   if (net.isIPv4(ip)) {
     const [a, b] = ip.split('.').map(Number) as [number, number];
@@ -69,7 +106,7 @@ export async function isPrivateWebhookTarget(url: string): Promise<boolean> {
 
 // Fan an event out to every matching webhook (scoped to the account's org)
 // as a persisted delivery row.
-export function dispatchEvent(payload: MessageReceivedPayload, orgId: string): number {
+export function dispatchEvent(payload: WebhookPayload, orgId: string): number {
   const hooks = db
     .select()
     .from(schema.webhooks)

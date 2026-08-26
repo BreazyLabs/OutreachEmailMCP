@@ -22,7 +22,16 @@ export const users = sqliteTable('users', {
     .references(() => orgs.id, { onDelete: 'cascade' }),
   email: text('email').notNull().unique(),
   passwordHash: text('password_hash').notNull(),
-  role: text('role', { enum: ['owner', 'member'] }).notNull().default('owner'),
+  // `superadmin` is platform-level: it can see, enter and create EVERY
+  // workspace. Granted only through the partner SSO handoff, never by
+  // signup, so it cannot be self-assigned.
+  role: text('role', { enum: ['owner', 'member', 'superadmin'] })
+    .notNull()
+    .default('owner'),
+  // Pocket ID subject for operators who sign in through the internal IdP.
+  // Identity is keyed on this, never on email: an address can be reassigned
+  // to a different person, `sub` cannot.
+  oidcSub: text('oidc_sub').unique(),
   createdAt: integer('created_at').notNull(),
 });
 
@@ -112,10 +121,28 @@ export const sendJobs = sqliteTable(
     lastError: text('last_error'),
     createdAt: integer('created_at').notNull(),
     sentAt: integer('sent_at'),
+    // Post-delivery outcomes, filled in by the inbound poller when a DSN or a
+    // reply arrives that correlates back to this job's Message-ID. A send is
+    // only "delivered" in the sense that the provider accepted it; a bounce
+    // that lands minutes later is the real verdict, so it is recorded here
+    // rather than mutating `status` (the job genuinely did send).
+    bouncedAt: integer('bounced_at'),
+    // hard = permanent (5.x.x, unknown recipient); soft = transient (4.x.x)
+    bounceType: text('bounce_type', { enum: ['hard', 'soft'] }),
+    // Enhanced status code from the DSN, e.g. "5.1.1"
+    bounceCode: text('bounce_code'),
+    bounceRecipient: text('bounce_recipient'),
+    bounceDiagnostic: text('bounce_diagnostic'),
+    repliedAt: integer('replied_at'),
+    // Provider message id of the inbound reply, so consumers can fetch it
+    replyMessageId: text('reply_message_id'),
   },
   (t) => [
     index('send_jobs_status_next').on(t.status, t.nextAttemptAt),
     index('send_jobs_account_created').on(t.accountId, t.createdAt),
+    // Correlating an inbound DSN/reply back to its send job is a hot path on
+    // every polled message, and Message-ID is the only stable join key.
+    index('send_jobs_message_id').on(t.messageId),
   ],
 );
 
@@ -224,6 +251,10 @@ export const uiSessions = sqliteTable('ui_sessions', {
   userId: text('user_id'),
   createdAt: integer('created_at').notNull(),
   expiresAt: integer('expires_at').notNull(),
+  // Workspace a superadmin has switched into. Null = their own org.
+  // Held on the session, not the user, so two tabs can look at different
+  // workspaces without fighting over one global "current org".
+  actingOrgId: text('acting_org_id'),
 });
 
 export type Org = typeof orgs.$inferSelect;

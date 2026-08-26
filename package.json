@@ -33,6 +33,7 @@
     "mailparser": "^3.7.2",
     "nanoid": "^5.0.9",
     "nodemailer": "^6.9.16",
+    "openid-client": "^6.8.7",
     "pino": "^9.5.0",
     "selfsigned": "^2.4.1",
     "smtp-server": "^3.13.6",

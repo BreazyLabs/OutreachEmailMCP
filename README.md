@@ -171,7 +171,128 @@ curl -H "Authorization: Bearer $KEY" "localhost:3000/api/v1/accounts/$ACCOUNT_ID
 curl -H "Authorization: Bearer $KEY" -O "localhost:3000/api/v1/accounts/$ACCOUNT_ID/messages/$MSG_ID/attachments/0"
 ```
 
-### Webhooks (new-mail notifications)
+### Delivery statistics
+
+Every send job carries its own outcome, so "how is this mailbox doing" is a
+read, not a reconstruction. Bounces are detected by parsing the DSNs that come
+back into the sending mailbox (RFC 3464 report parts, `X-Failed-Recipients`, or
+a daemon sender with a failure subject) and correlating them to the original
+send by RFC822 Message-ID; replies are correlated the same way via
+`In-Reply-To`/`References`. A duplicate DSN never double-counts.
+
+```bash
+# workspace rollup + per-mailbox breakdown
+curl -H "Authorization: Bearer $KEY" "localhost:3000/api/v1/stats?days=30"
+# → {"total":{"sent":812,"failed":3,"queued":0,"bounced":11,"hardBounced":9,
+#              "softBounced":2,"replied":47,"bounceRate":1.35,"replyRate":5.79},
+#    "accounts":[{"accountId":"…","email":"you@gmail.com","sent":…}]}
+
+# one mailbox, with a daily series for charting
+curl -H "Authorization: Bearer $KEY" "localhost:3000/api/v1/accounts/$ACCOUNT_ID/stats?days=30"
+
+# the bounces themselves — the addresses to suppress
+curl -H "Authorization: Bearer $KEY" "localhost:3000/api/v1/bounces?days=30"
+# → {"bounces":[{"recipient":"nobody@nowhere.test","type":"hard","code":"5.1.1",
+#                "diagnostic":"smtp; 550 5.1.1 …","account":"you@gmail.com",…}]}
+```
+
+`bounced` is deliberately not a subset of `failed`: `failed` means the provider
+refused the submission, `bounced` means it was accepted and the receiving system
+rejected it afterwards.
+
+### Provisioning API (embedding this gateway in another product)
+
+Set `ADMIN_API_KEY` to enable a small cross-tenant surface for a product that
+puts this gateway underneath its own UI and needs a workspace per customer
+without a human at the signup form. Unset, the routes 404 and the surface does
+not exist.
+
+```bash
+# create a workspace and get an unrestricted key for it (idempotent on email)
+curl -X POST -H "Authorization: Bearer $ADMIN_API_KEY" -H "Content-Type: application/json" \
+  -d '{"name":"Acme Corp","email":"acme@yourapp.internal","plan":"pro"}' \
+  localhost:3000/api/v1/admin/orgs
+# → {"created":true,"org":{"id":"…","plan":"pro","limits":{…},"accounts":[]},"apiKey":"oem_live_…"}
+
+curl -H "Authorization: Bearer $ADMIN_API_KEY" localhost:3000/api/v1/admin/orgs          # list
+curl -H "Authorization: Bearer $ADMIN_API_KEY" localhost:3000/api/v1/admin/orgs/$ORG_ID  # detail
+curl -X POST -H "Authorization: Bearer $ADMIN_API_KEY" localhost:3000/api/v1/admin/orgs/$ORG_ID/api-keys  # rotate
+```
+
+The embedding product then uses the returned workspace key for everything else:
+mint a connect link for the end user, list mailboxes, send, and pull stats.
+
+### Partner SSO (superadmin handoff)
+
+With `ADMIN_API_KEY` set, the embedding platform can sign its own operators
+straight into this UI as **superadmins** — able to see, enter, create and
+manage every workspace on the instance — without a second password.
+
+The platform mints a short-lived token and links to it:
+
+```
+GET {BASE_URL}/auth/sso/partner?token=<payload>.<sig>&next=/ui
+```
+
+`payload` is base64url `{"email","name","exp","nonce"}`; `sig` is
+HMAC-SHA256 of the payload keyed with `HMAC(ADMIN_API_KEY, "sso-v1")` — a
+DERIVED key, so a leaked signature can never be replayed as an API key.
+Tokens expire (minutes, set by the issuer) and superadmin is granted **only**
+here: signup cannot produce one.
+
+Superadmins get a workspace switcher in the nav and a **+ Workspace** button;
+the workspace they are acting in is stored per session, so two tabs can look
+at two different customers at once.
+
+### Internal sign-in (Pocket ID, staff only)
+
+Breazy staff sign in with a passkey through Pocket ID at `id.internal` and land
+as superadmins — the same grant as the partner handoff above.
+
+The offer is **conditional on where the request came from**. `id.internal`
+resolves only on the Breazy tailnet, so the button appears — and the routes
+respond — only for traffic that arrived through the internal nginx gateway.
+On the public hostname the login page is unchanged and both routes 404, so a
+public visitor never learns internal sign-in exists. Conversely, on the
+internal hostname the password form is *not* offered: staff use passkeys, and
+the public hostname remains the escape hatch if the IdP is down.
+
+"Came from the gateway" is two signals, ANDed (`src/auth/internal-network.ts`):
+
+| Signal | Why it holds |
+|---|---|
+| `Host: emailproxy.internal` | Traefik has no router for that name, so a public request carrying it 404s at the edge |
+| `X-Internal-Gateway: <secret>` | any container on the host can dial the gateway's IP, but won't know the secret; nginx overwrites the header, so a client cannot supply its own |
+
+Missing secret ⇒ the check returns false for everything. It fails closed.
+
+> **The public edge must strip the header.** Traefik forwards arbitrary client
+> headers, so without a `strip-internal-trust` middleware on every public
+> domain, anyone can send `X-Internal-Gateway: …` to the public hostname. Attach
+> it via Dokploy (`domain.update`) so it survives redeploys, and re-verify after
+> every deploy — a missing attachment fails silently.
+
+Setup:
+
+```bash
+# 1. register the client (needs POCKETID_API_KEY)
+oidc-app emailproxy https://emailproxy.internal/auth/callback
+
+# 2. set on the deployment
+INTERNAL_HOSTNAME=emailproxy.internal
+INTERNAL_GATEWAY_SECRET=<same value as the gateway vhost's proxy_set_header>
+OIDC_CLIENT_ID=…
+OIDC_CLIENT_SECRET=…
+```
+
+The container must trust the private CA that issues `*.internal` certificates.
+The Dockerfile bakes it in (`certs/breazy-root.crt` + `NODE_EXTRA_CA_CERTS`);
+Node reads that variable at process start, so putting it in a `.env` is too
+late to have any effect. When it is missing, the browser redirect succeeds and
+the token exchange fails — `/auth/oidc/start` reports the certificate error
+explicitly rather than a bare "fetch failed".
+
+### Webhooks (new-mail notifications and delivery outcomes)
 
 Register a URL (UI or `POST /api/v1/webhooks {"url": "...", "accountId": "..."}`). Each new inbound message triggers:
 
@@ -186,6 +307,12 @@ X-OutreachEmailMCP-Signature: sha256=<hex HMAC-SHA256 of the raw body, keyed wit
  "message":{"id":"…","from":"Alice <alice@example.com>","to":"you@gmail.com",
             "subject":"Hi","date":"2026-07-20T12:00:00Z","snippet":"…","hasAttachments":false}}
 ```
+
+Subscribe with `{"events": [...]}` — `message.received` (default) plus the
+outcome events for mail you sent: `message.sent`, `message.failed`,
+`message.bounced`, `message.replied`. Outcome payloads carry a `send` object
+(`jobId`, `messageId`, `subject`, `to`, plus `bounce` or `reply` detail) instead
+of `message`, so one endpoint can drive a delivery dashboard without polling.
 
 Verify the signature, then fetch the full body via the read API using `message.id`. Non-2xx responses are retried up to 6 times with exponential backoff; see delivery history in the UI or `GET /api/v1/webhooks/:id/deliveries`. New mail is detected by polling (default every 60s, `POLL_INTERVAL`); no public inbound URL is required. Webhook targets that resolve to private/loopback addresses are rejected unless `WEBHOOKS_ALLOW_PRIVATE=true`.
 

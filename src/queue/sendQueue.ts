@@ -104,6 +104,13 @@ function rowToJob(r: Record<string, unknown>): SendJob {
     lastError: r.last_error,
     createdAt: r.created_at,
     sentAt: r.sent_at,
+    bouncedAt: r.bounced_at,
+    bounceType: r.bounce_type,
+    bounceCode: r.bounce_code,
+    bounceRecipient: r.bounce_recipient,
+    bounceDiagnostic: r.bounce_diagnostic,
+    repliedAt: r.replied_at,
+    replyMessageId: r.reply_message_id,
   } as SendJob;
 }
 

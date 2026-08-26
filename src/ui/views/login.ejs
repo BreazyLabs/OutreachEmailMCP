@@ -2,25 +2,43 @@
 <div class="auth-wrap">
   <div class="auth-card">
     <p class="auth-brand">📧 OutreachEmailMCP</p>
-    <p class="auth-sub"><%= saasMode ? 'Log in to your workspace' : 'Log in to your gateway' %></p>
-    <form method="post" action="/ui/login">
-      <% if (saasMode) { %>
-        <label for="email">Email</label>
-        <input id="email" type="email" name="email" autocomplete="email" autofocus>
-        <label for="password">Password</label>
-        <input id="password" type="password" name="password" autocomplete="current-password">
-      <% } else { %>
-        <label for="password">Admin password</label>
-        <input id="password" type="password" name="password" autocomplete="current-password" autofocus>
+    <% if (typeof internalSso !== 'undefined' && internalSso) { %>
+      <%# Staff arriving over the tailnet: Pocket ID is the only route in.
+          Passkeys, no password — and no password fallback offered here, since
+          the public hostname still serves the form if the IdP is down. %>
+      <p class="auth-sub">Breazy staff sign-in</p>
+      <a class="btn-passkey" href="/auth/oidc/start">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="9" cy="8" r="4"/>
+          <path d="M2 21v-1a6 6 0 0 1 7.5-5.81"/>
+          <circle cx="17" cy="15" r="3"/>
+          <path d="M17 18v4l1.5-1.5L20 22v-4"/>
+        </svg>
+        <span>Sign in with Pocket ID</span>
+      </a>
+      <p class="auth-hint">Uses your passkey — Touch&nbsp;ID, Face&nbsp;ID or a hardware key.</p>
+    <% } else { %>
+      <p class="auth-sub"><%= saasMode ? 'Log in to your workspace' : 'Log in to your gateway' %></p>
+      <form method="post" action="/ui/login">
+        <% if (saasMode) { %>
+          <label for="email">Email</label>
+          <input id="email" type="email" name="email" autocomplete="email" autofocus>
+          <label for="password">Password</label>
+          <input id="password" type="password" name="password" autocomplete="current-password">
+        <% } else { %>
+          <label for="password">Admin password</label>
+          <input id="password" type="password" name="password" autocomplete="current-password" autofocus>
+        <% } %>
+        <button type="submit">Log in</button>
+      </form>
+      <% if (typeof ssoEnabled !== 'undefined' && ssoEnabled) { %>
+        <div class="divider">or</div>
+        <%- include('_google-btn') %>
       <% } %>
-      <button type="submit">Log in</button>
-    </form>
-    <% if (typeof ssoEnabled !== 'undefined' && ssoEnabled) { %>
-      <div class="divider">or</div>
-      <%- include('_google-btn') %>
-    <% } %>
-    <% if (saasMode) { %>
-      <p class="auth-alt">New here? <a href="/ui/signup">Create a workspace</a></p>
+      <% if (saasMode) { %>
+        <p class="auth-alt">New here? <a href="/ui/signup">Create a workspace</a></p>
+      <% } %>
     <% } %>
   </div>
 </div>
