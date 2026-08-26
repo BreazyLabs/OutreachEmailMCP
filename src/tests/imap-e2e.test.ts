@@ -54,7 +54,24 @@ const RAW_SPAM = Buffer.from(
     'this landed in spam',
   ].join('\r\n'),
 );
-const RAWS: Record<string, Buffer> = { 'prov-a': RAW_A, 'prov-b': RAW_B, 'prov-spam': RAW_SPAM };
+const RAW_GHOST = Buffer.from(
+  [
+    'From: Ghost <ghost@warmup.example>',
+    'To: tester@gmail.com',
+    'Subject: stale spam row',
+    'Message-ID: <ghost-1@example.com>',
+    'Date: Mon, 20 Jul 2026 08:00:00 +0000',
+    'Content-Type: text/plain',
+    '',
+    'upstream no longer has this one',
+  ].join('\r\n'),
+);
+const RAWS: Record<string, Buffer> = {
+  'prov-a': RAW_A,
+  'prov-b': RAW_B,
+  'prov-spam': RAW_SPAM,
+  'prov-ghost': RAW_GHOST,
+};
 
 // Simulated upstream state for warmup verification
 export const upstream = {
@@ -76,6 +93,10 @@ vi.mock('../providers/index.js', () => ({
         .map(([id]) => id);
     },
     async moveMessage(_accountId: string, messageId: string, _from: string, to: string) {
+      if (!(messageId in upstream.folders)) {
+        const { MessageGoneError } = await import('../providers/errors.js');
+        throw new MessageGoneError('Graph POST /me/messages/x/move: HTTP 404 ErrorItemNotFound');
+      }
       upstream.folders[messageId] = to;
       return null;
     },
@@ -106,6 +127,7 @@ vi.mock('../providers/index.js', () => ({
 
 let server: net.Server;
 let port: number;
+let accountId: string;
 let username: string;
 let password: string;
 
@@ -114,7 +136,7 @@ beforeAll(async () => {
   runMigrations();
   const { nanoid } = await import('nanoid');
   const now = Date.now();
-  const accountId = `imap-test-${nanoid(6)}`;
+  accountId = `imap-test-${nanoid(6)}`;
   db.insert(schema.accounts)
     .values({
       id: accountId,
@@ -286,6 +308,35 @@ describe('IMAP end-to-end (real client over STARTTLS)', () => {
     // marking read syncs upstream
     await client.messageFlagsAdd(String(found[0]), ['\\Seen'], { uid: true });
     expect(upstream.flags['prov-spam']?.seen).toBe(true);
+
+    await client.logout();
+  }, 20_000);
+
+  it('drops a Spam row whose upstream copy is already gone instead of failing forever', async () => {
+    const { indexMessage } = await import('../imap/index-store.js');
+    const { simpleParser } = await import('mailparser');
+    // A row that upstream no longer knows about (deleted, or moved and re-id'd)
+    indexMessage(accountId, 'prov-ghost', RAW_GHOST, await simpleParser(RAW_GHOST), 'Spam');
+
+    const client = await connect();
+    const spam = await client.mailboxOpen('Spam');
+    expect(spam.exists).toBe(1);
+    const uids = (await client.search({ all: true }, { uid: true })) || [];
+
+    // MOVE succeeds from the client's point of view: the message did leave Spam
+    await expect(client.messageMove(String(uids[0]), 'INBOX', { uid: true })).resolves.toBeTruthy();
+
+    // ...and the stale row is gone, so a retry can't repeat the same 404
+    const spamAfter = await client.mailboxOpen('Spam');
+    expect(spamAfter.exists).toBe(0);
+    const { db, schema } = await import('../db/index.js');
+    const { eq } = await import('drizzle-orm');
+    const rows = db
+      .select()
+      .from(schema.imapMessages)
+      .where(eq(schema.imapMessages.providerMessageId, 'prov-ghost'))
+      .all();
+    expect(rows).toHaveLength(0);
 
     await client.logout();
   }, 20_000);

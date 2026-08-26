@@ -12,6 +12,16 @@ export class PermanentError extends Error {
   readonly kind = 'permanent';
 }
 
+// The message id we hold no longer resolves upstream: it was deleted, moved by
+// someone else, or (on Graph, which reassigns ids on every move) already moved
+// by us. Retrying can never succeed — the caller's index row is stale and the
+// only cure is to forget it.
+export class MessageGoneError extends PermanentError {}
+
+export function isMessageGone(err: unknown): boolean {
+  return err instanceof MessageGoneError;
+}
+
 // The account authenticates fine but has no usable mailbox behind it — a
 // Microsoft identity with no Exchange Online licence (or an on-premise
 // mailbox), or a Google account with Gmail switched off. Retrying never helps
@@ -40,5 +50,7 @@ export async function throwForResponse(res: Response, context: string): Promise<
   const message = `${context}: HTTP ${res.status} ${detail}`;
   if (res.status === 401) throw new AuthError(message);
   if (res.status === 429 || res.status >= 500) throw new RetryableError(message);
+  // A 404 about the mailbox itself is an account problem, not a stale id
+  if (res.status === 404 && !isMailboxUnavailable(message)) throw new MessageGoneError(message);
   throw new PermanentError(message);
 }

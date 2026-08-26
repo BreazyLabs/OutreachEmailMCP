@@ -22,12 +22,14 @@ import {
   distinctFolders,
   syncProviderFolder,
   recordMove,
+  forgetMessage,
   accountGrantedScopes,
   imapIndexEvents,
   type FlagName,
   type CachedEnvelope,
 } from './index-store.js';
 import { logActivity } from '../observability/activity.js';
+import { isMessageGone } from '../providers/errors.js';
 import { PROVIDER_FOLDERS, type CanonicalFolder } from '../providers/types.js';
 import {
   parseMimeStructure,
@@ -892,6 +894,8 @@ export class ImapSession {
     if (targets.length === 0) return this.ok(tag, 'MOVE completed');
     const provider = providerFor(this.account.provider);
     const moved: ImapMessage[] = [];
+    const vanished: ImapMessage[] = [];
+    let failed = 0;
     for (const msg of targets) {
       if (msg.localPath) continue; // local-only rows have no upstream copy
       try {
@@ -911,6 +915,22 @@ export class ImapSession {
           detail: `${source}→${target} uid=${msg.uid} subject=${(JSON.parse(msg.envelopeJson) as CachedEnvelope).subject ?? ''}`.slice(0, 300),
         });
       } catch (err) {
+        // The upstream copy is gone (deleted, or already moved and re-id'd).
+        // Keeping the row would fail this way on every retry, so forget it and
+        // tell the client the message left the folder — which it did.
+        if (isMessageGone(err)) {
+          forgetMessage(msg);
+          vanished.push(msg);
+          logActivity({
+            category: 'imap',
+            action: 'move',
+            status: 'ok',
+            accountId: this.account.id,
+            detail: `${source}→${target} uid=${msg.uid} already gone upstream, dropped from index`,
+          });
+          continue;
+        }
+        failed++;
         logActivity({
           category: 'imap',
           action: 'move',
@@ -921,13 +941,14 @@ export class ImapSession {
         });
       }
     }
-    // Report moved messages as expunged from the source, highest seq first
-    const movedIds = new Set(moved.map((m) => m.id));
+    // Report moved and vanished messages as expunged from the source, highest
+    // seq first so the earlier sequence numbers stay valid
+    const goneIds = new Set([...moved, ...vanished].map((m) => m.id));
     for (let i = this.messages.length - 1; i >= 0; i--) {
-      if (movedIds.has(this.messages[i]!.id)) this.write(`* ${i + 1} EXPUNGE${CRLF}`);
+      if (goneIds.has(this.messages[i]!.id)) this.write(`* ${i + 1} EXPUNGE${CRLF}`);
     }
-    this.messages = this.messages.filter((m) => !movedIds.has(m.id));
-    if (moved.length < targets.filter((t) => !t.localPath).length) {
+    this.messages = this.messages.filter((m) => !goneIds.has(m.id));
+    if (failed > 0) {
       return this.no(tag, 'MOVE completed with errors (see activity log)');
     }
     return this.ok(tag, 'MOVE completed');
@@ -964,6 +985,7 @@ export class ImapSession {
       this.canWrite &&
       this.isProviderFolder(this.folder) &&
       known.some((k) => k === 'Seen' || k === 'Flagged');
+    const vanished: ImapMessage[] = [];
     for (const msg of this.resolveSet(setSpec, uidMode)) {
       applyFlags(msg.id, known, mode);
       const updated = db
@@ -992,6 +1014,20 @@ export class ImapSession {
               wants,
             );
           } catch (err) {
+            // Stale id: the message is no longer where we think it is. Drop the
+            // row rather than failing the same way on every later command.
+            if (isMessageGone(err)) {
+              forgetMessage(msg);
+              vanished.push(msg);
+              logActivity({
+                category: 'imap',
+                action: 'flags',
+                status: 'ok',
+                accountId: this.account.id,
+                detail: `uid=${msg.uid} gone upstream, dropped from index`,
+              });
+              continue;
+            }
             logActivity({
               category: 'imap',
               action: 'flags',
@@ -1003,6 +1039,13 @@ export class ImapSession {
           }
         }
       }
+    }
+    if (vanished.length > 0) {
+      const goneIds = new Set(vanished.map((m) => m.id));
+      for (let i = this.messages.length - 1; i >= 0; i--) {
+        if (goneIds.has(this.messages[i]!.id)) this.write(`* ${i + 1} EXPUNGE${CRLF}`);
+      }
+      this.messages = this.messages.filter((m) => !goneIds.has(m.id));
     }
     this.ok(tag, 'STORE completed');
   }

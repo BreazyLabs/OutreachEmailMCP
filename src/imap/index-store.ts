@@ -290,6 +290,14 @@ export async function syncProviderFolder(
   return { added, removed };
 }
 
+// Drop a row whose upstream copy is gone (deleted, or moved and re-id'd behind
+// our back). Keeping it would make every later command against that UID fail
+// the same way, forever.
+export function forgetMessage(row: ImapMessage): void {
+  if (row.localPath) fs.rmSync(row.localPath, { force: true });
+  db.delete(schema.imapMessages).where(eq(schema.imapMessages.id, row.id)).run();
+}
+
 // Reflect an upstream move in the index: new folder, fresh UID there, and the
 // provider's replacement id when it reassigns ids (Graph does).
 export function recordMove(
