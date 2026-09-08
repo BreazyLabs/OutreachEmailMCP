@@ -316,6 +316,48 @@ of `message`, so one endpoint can drive a delivery dashboard without polling.
 
 Verify the signature, then fetch the full body via the read API using `message.id`. Non-2xx responses are retried up to 6 times with exponential backoff; see delivery history in the UI or `GET /api/v1/webhooks/:id/deliveries`. New mail is detected by polling (default every 60s, `POLL_INTERVAL`); no public inbound URL is required. Webhook targets that resolve to private/loopback addresses are rejected unless `WEBHOOKS_ALLOW_PRIVATE=true`.
 
+## Warmup (built-in inbox warmup pool)
+
+Every connected mailbox can opt into a **warmup pool**: the mailboxes on the proxy write to each other in short, human-looking threads, and the engine watches where each message lands and does what a person's mail client would do with it. Nothing about it is visible to the tools that use the gateway — the REST/MCP listings, IMAP, webhooks, the send log and the stats all exclude warmup traffic — so a sequencer watching the mailbox never mistakes pool chatter for a reply.
+
+What the pool does, per mailbox and per day:
+
+- **Opens conversations** with other pool mailboxes, ramping from a few a day up to the daily limit, on a two-peak daytime schedule in the mailbox's own timezone (never on a round minute, never bursting after downtime).
+- **Threads**: replies with proper `In-Reply-To`/`References` and Gmail- or Outlook-style quoting, thread lengths skewed short, a share of openers Cc a third mailbox (replies go to everyone), a share go to a **same-domain colleague** (internal threads), and received mail is sometimes **forwarded** on to a third mailbox.
+- **Client actions**: marks read after a delay, stars some, marks some important (Gmail label / Outlook importance), honours **read-receipt requests** with a real MDN, and tidies mail out of the owner's real inbox after a few days (archive, a "Warmup" label/folder, or trash).
+- **Placement**: every arrival is recorded as inbox / spam / Gmail category / Outlook "Other" / missing / bounced. Spam placements are **rescued** (moved to the inbox, which is the not-spam signal), Promotions → Primary and Other → Focused are fixed, and a 7-day spam+missing rate per sender drives the **reputation controller**: hold the ramp and halve volume, or auto-pause for a cooldown.
+- **Content** comes from multi-turn scripts written in batches by any OpenAI-compatible model (`WARMUP_LLM_BASE_URL`, `WARMUP_LLM_API_KEY`, `WARMUP_LLM_MODEL`), validated (no links, numbers, placeholders or sales language) and kept in a pool; a bundled template corpus (English and Dutch) covers gaps, so a dead API never blocks a send.
+
+Enable it per mailbox on the account page or in bulk on the **Warmup** page, which also holds the workspace defaults. Settings are layered — instance env caps → workspace defaults → per-mailbox overrides — and the per-mailbox form shows where each value comes from. The knobs mirror what Instantly and Smartlead expose: start volume, increase per day, daily limit, slow start, randomize %, weekdays only + weekend factor, timezone and send window, min gap, reply rate, max thread turns, reply/read delays, internal-thread share, Cc rate, forward rate, read/star/important rates, read-receipt request/send rates, spam rescue rate and delay, category fix, receive limit, languages, register, cleanup mode, pairing rules (same domain / same workspace / prefer cross-provider), auto-throttle thresholds and cooldown, and an optional combined cap on warmup + real sends.
+
+Every warmup message is recognisable three ways: its `Message-ID` is in the engine's registry, it carries a signed `X-OEM-Warmup` header, and the workspace's **filter tag** (an Instantly-style code, editable, shown on the Warmup page) is the last line of the body so external tools can filter it too. Pass `?includeWarmup=true` to the message listing or send-log endpoints to see it deliberately.
+
+```bash
+# pool overview + per-mailbox placement, and one mailbox in detail
+curl -H "Authorization: Bearer $KEY" localhost:3000/api/v1/warmup
+curl -H "Authorization: Bearer $KEY" localhost:3000/api/v1/accounts/$ACCOUNT_ID/warmup
+
+# enable + override a few settings on one mailbox (null clears an override)
+curl -X PUT -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"enabled":true,"settings":{"dailyLimit":40,"replyRate":30,"timezone":"Europe/Amsterdam"},"persona":{"firstName":"Alice"}}' \
+  localhost:3000/api/v1/accounts/$ACCOUNT_ID/warmup
+curl -X POST -H "Authorization: Bearer $KEY" localhost:3000/api/v1/accounts/$ACCOUNT_ID/warmup/pause   # start|pause|resume|stop
+
+# bulk: one action and/or a settings patch across many mailboxes
+curl -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"accountIds":["…","…"],"action":"enable","settings":{"weekdaysOnly":true}}' localhost:3000/api/v1/warmup/bulk
+
+# workspace defaults, pool scope (instance | org), filter tag, visibility
+curl -X PUT -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"defaults":{"dailyLimit":30},"poolScope":"instance","emitWebhooks":false}' localhost:3000/api/v1/warmup/defaults
+```
+
+MCP exposes the same as `get_warmup_status`, `list_warmup_messages`, `set_warmup` and `bulk_warmup`; webhooks can opt into `warmup.*` events (spam detected, rescued, throttled, paused, resumed).
+
+Engine settings (env): `WARMUP_ENABLED` (kill switch, default on), `WARMUP_MAX_DAILY_PER_ACCOUNT` (50), `WARMUP_MIN_POOL_SIZE` (2), `WARMUP_LLM_*`, `WARMUP_LLM_DAILY_CALL_BUDGET` (200), `WARMUP_SCRIPT_POOL_MIN` (60/language), `WARMUP_SPAM_SWEEP_SECONDS` (600), `WARMUP_ARRIVAL_TIMEOUT_HOURS` (6), `WARMUP_TASK_GRACE_MINUTES` (45), and in SaaS mode `PLAN_FREE_WARMUP_DAILY` / `PLAN_PRO_WARMUP_DAILY` (warmup does not consume the plan's real send quota).
+
+Notes: the pool is **instance-wide by default** — in SaaS mode that means mailboxes from different workspaces exchange mail (the proxy hides it, the human owner sees it in Gmail/Outlook until cleanup runs); a workspace can restrict itself to its own mailboxes with `poolScope: "org"`, which is symmetric. A mailbox connected without mailbox-write access still sends and replies but cannot mark read, star or rescue; reconnect it to grant the scope. A real person replying on a warmup thread closes the thread and their message stays visible. The daily health mail reports auto-pauses, throttling, a too-small pool, stalled mailboxes, missing mail and content-API failures.
+
 ## Operational notes
 
 - **Secrets**: OAuth tokens and SMTP passwords are AES-256-GCM-encrypted with `MASTER_KEY` (SMTP passwords stay readable for export/re-display); API keys are stored hashed and shown exactly once. Losing `MASTER_KEY` means reconnecting accounts and regenerating SMTP credentials.

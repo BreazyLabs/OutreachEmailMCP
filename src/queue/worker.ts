@@ -8,6 +8,7 @@ import { logger } from '../logger.js';
 import { logActivity } from '../observability/activity.js';
 import type { SendJob } from '../db/schema.js';
 import { emitSendOutcome } from './outcome-events.js';
+import { onWarmupJobSent, onWarmupJobFailed } from '../warmup/ledger.js';
 import {
   claimJobs,
   markSent,
@@ -49,7 +50,8 @@ async function processJob(job: SendJob): Promise<void> {
   try {
     const providerMessageId = await providerFor(account.provider).sendRaw(job.accountId, raw);
     markSent(job.id, providerMessageId);
-    emitSendOutcome(account, job.id);
+    if (job.source === 'warmup') onWarmupJobSent(job);
+    else emitSendOutcome(account, job.id);
     logger.info(
       { jobId: job.id, account: account.email, subject: job.subject },
       'message sent',
@@ -78,7 +80,9 @@ async function processJob(job: SendJob): Promise<void> {
       markRetry(job, message);
       // markRetry flips the job to `failed` once attempts run out; the emit
       // is a no-op while it is still retrying.
-      emitSendOutcome(account, job.id);
+      if (job.source === 'warmup') {
+        if (job.attempts + 1 >= job.maxAttempts) onWarmupJobFailed(job, message);
+      } else emitSendOutcome(account, job.id);
       logger.warn({ jobId: job.id, attempts: job.attempts + 1, err: message }, 'send failed; will retry');
       logActivity({
         category: 'delivery',
@@ -90,7 +94,8 @@ async function processJob(job: SendJob): Promise<void> {
       });
     } else {
       markFailed(job.id, message);
-      emitSendOutcome(account, job.id);
+      if (job.source === 'warmup') onWarmupJobFailed(job, message);
+      else emitSendOutcome(account, job.id);
       logger.error({ jobId: job.id, err: message }, 'send failed permanently');
       logActivity({
         category: 'delivery',

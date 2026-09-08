@@ -1,0 +1,86 @@
+<%#
+  Warmup settings fields, grouped. Expects:
+    fields    – WARMUP_FIELDS
+    values    – values set at THIS layer (partial), or {} for "apply to selected"
+    baseline  – resolved values from the layer above (placeholders)
+    mode      – 'defaults' | 'override' | 'bulk'
+    sources   – optional map key → 'instance'|'org'|'account'|'cap'
+%>
+<%
+  const groups = [];
+  for (const f of fields) { if (!groups.includes(f.group)) groups.push(f.group); }
+  const has = (k) => values && values[k] !== undefined && values[k] !== null;
+  const shown = (k) => {
+    const v = has(k) ? values[k] : undefined;
+    if (v === undefined) return '';
+    return Array.isArray(v) ? v.join(', ') : String(v);
+  };
+  const base = (k) => {
+    const v = baseline ? baseline[k] : undefined;
+    if (v === undefined || v === null) return '';
+    return Array.isArray(v) ? v.join(', ') : String(v);
+  };
+  const blankLabel = mode === 'bulk' ? '(unchanged)' : mode === 'override' ? '(inherit workspace default)' : '(instance default)';
+%>
+<style>
+  .wf-groups { display:grid; grid-template-columns:repeat(auto-fill, minmax(300px, 1fr)); gap:1rem 1.4rem; }
+  .wf-group h4 { margin:0 0 0.4rem; font-size:0.78rem; text-transform:uppercase; letter-spacing:0.05em; color:var(--muted); }
+  .wf-field { display:grid; grid-template-columns: 1fr 120px 22px; gap:0.4rem; align-items:center; padding:0.22rem 0; border-bottom:1px dashed var(--line); }
+  .wf-field label { font-size:0.85rem; }
+  .wf-field .hint { display:block; color:var(--muted); font-size:0.72rem; line-height:1.25; }
+  .wf-field input, .wf-field select { width:100%; padding:0.3rem 0.4rem; font-size:0.82rem; }
+  .wf-field .src { font-size:0.68rem; color:var(--muted); }
+  .wf-field .src.account { color:var(--accent); font-weight:600; }
+  .wf-field .src.cap { color:var(--err); font-weight:600; }
+  .wf-clear { text-align:center; }
+  .wf-clear input { width:auto; }
+</style>
+<div class="wf-groups">
+<% for (const g of groups) { %>
+  <div class="wf-group">
+    <h4><%= g %></h4>
+    <% for (const f of fields.filter((x) => x.group === g)) { %>
+    <div class="wf-field">
+      <label for="<%= mode %>_<%= f.key %>">
+        <%= f.label %>
+        <% if (sources && sources[f.key] && mode === 'override') { %><span class="src <%= sources[f.key] %>"><%= sources[f.key] === 'cap' ? 'capped by plan' : 'from ' + sources[f.key] %></span><% } %>
+        <% if (f.help) { %><span class="hint"><%= f.help %></span><% } %>
+      </label>
+      <% if (f.type === 'bool') { %>
+        <select id="<%= mode %>_<%= f.key %>" name="<%= f.key %>">
+          <option value="" <%= !has(f.key) ? 'selected' : '' %>><%= blankLabel %><%= base(f.key) ? ' · ' + (base(f.key) === 'true' ? 'on' : 'off') : '' %></option>
+          <option value="true" <%= has(f.key) && values[f.key] === true ? 'selected' : '' %>>On</option>
+          <option value="false" <%= has(f.key) && values[f.key] === false ? 'selected' : '' %>>Off</option>
+        </select>
+      <% } else if (f.type === 'select') { %>
+        <select id="<%= mode %>_<%= f.key %>" name="<%= f.key %>">
+          <option value="" <%= !has(f.key) ? 'selected' : '' %>><%= blankLabel %><%= base(f.key) ? ' · ' + base(f.key) : '' %></option>
+          <% for (const o of f.options) { %>
+          <option value="<%= o.value %>" <%= has(f.key) && values[f.key] === o.value ? 'selected' : '' %>><%= o.label %></option>
+          <% } %>
+        </select>
+      <% } else if (f.type === 'time') { %>
+        <input id="<%= mode %>_<%= f.key %>" type="time" name="<%= f.key %>" value="<%= shown(f.key) %>" placeholder="<%= base(f.key) %>">
+      <% } else if (f.type === 'int' || f.type === 'percent' || f.type === 'number') { %>
+        <input id="<%= mode %>_<%= f.key %>" type="number" name="<%= f.key %>" value="<%= shown(f.key) %>" placeholder="<%= base(f.key) || '—' %>"
+               <%= f.min !== undefined ? 'min="' + f.min + '"' : '' %> <%= f.max !== undefined ? 'max="' + f.max + '"' : '' %> step="<%= f.step ?? 1 %>">
+      <% } else { %>
+        <input id="<%= mode %>_<%= f.key %>" type="text" name="<%= f.key %>" value="<%= shown(f.key) %>" placeholder="<%= base(f.key) || '—' %>">
+      <% } %>
+      <div class="wf-clear">
+        <% if (mode !== 'bulk' && has(f.key)) { %>
+          <input type="checkbox" name="clear_<%= f.key %>" value="1" title="Reset to inherited value">
+        <% } else if (mode === 'bulk') { %>
+          <input type="checkbox" name="clear_<%= f.key %>" value="1" title="Clear this override on the selected mailboxes">
+        <% } %>
+      </div>
+    </div>
+    <% } %>
+  </div>
+<% } %>
+</div>
+<p class="muted" style="margin:0.6rem 0 0">
+  <% if (mode === 'bulk') { %>Blank fields are left unchanged. Tick the box next to a field to clear that override on the selected mailboxes instead.<% }
+     else if (mode === 'override') { %>Blank fields inherit the workspace default (shown as placeholder). Tick the box next to a set field to go back to inheriting.<% }
+     else { %>Blank fields use the instance default (shown as placeholder). Every mailbox inherits these unless it overrides a field.<% } %>
+</p>

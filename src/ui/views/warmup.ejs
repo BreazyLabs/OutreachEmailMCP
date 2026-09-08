@@ -1,0 +1,167 @@
+<%- include('_header') %>
+<%
+  const fmtPct = (v) => v === null || v === undefined ? '—' : v.toFixed(0) + '%';
+  const fmtWhen = (t) => t ? new Date(t).toLocaleString() : '—';
+  const stateLabel = (s) => ({ off: 'off', ramping: 'ramping', steady: 'steady', paused: 'paused', auto_paused: 'auto-paused', blocked_upstream: 'blocked' })[s] || s;
+%>
+<style>
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:0.8rem; }
+  .kpi { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:0.7rem 0.9rem; }
+  .kpi .n { font-size:1.4rem; font-weight:700; font-variant-numeric:tabular-nums; }
+  .kpi .l { color:var(--muted); font-size:0.76rem; text-transform:uppercase; letter-spacing:0.04em; }
+  .kpi.bad .n { color:var(--err); } .kpi.good .n { color:var(--ok); }
+  .badge.ramping { background:color-mix(in srgb, var(--warn) 15%, transparent); color:var(--warn); }
+  .badge.steady { background:color-mix(in srgb, var(--ok) 15%, transparent); color:var(--ok); }
+  .badge.paused, .badge.off { background:color-mix(in srgb, var(--muted) 15%, transparent); color:var(--muted); }
+  .badge.auto_paused, .badge.blocked_upstream { background:color-mix(in srgb, var(--err) 15%, transparent); color:var(--err); }
+  .num { font-variant-numeric:tabular-nums; text-align:right; }
+  .rate { font-weight:600; }
+  .rate.good { color:var(--ok); } .rate.warn { color:var(--warn); } .rate.bad { color:var(--err); }
+  .bulkbar { display:flex; gap:0.6rem; align-items:center; flex-wrap:wrap; margin:0.6rem 0; }
+  details.panel { margin-top:0.8rem; }
+  details.panel summary { cursor:pointer; font-weight:600; font-size:0.9rem; }
+  .tagbox { font-family: ui-monospace, monospace; letter-spacing:0.08em; }
+  tr.dim td { opacity:0.6; }
+</style>
+
+<h1>Warmup</h1>
+<p class="muted" style="max-width:70ch">
+  Every mailbox you enable joins a pool in which mailboxes write to each other in short, human-looking threads: openers, replies, forwards, Cc'd colleagues, read receipts, stars. Wherever a message lands is recorded, spam placements are rescued, and none of it shows up in your API, IMAP, webhooks or stats.
+</p>
+
+<% if (!engineEnabled) { %>
+<div class="alert error">The warmup engine is switched off on this instance (<code>WARMUP_ENABLED=false</code>). Settings can be edited but nothing will run.</div>
+<% } %>
+
+<div class="kpis">
+  <div class="kpi"><div class="n"><%= overview.totals.enabled %></div><div class="l">mailboxes warming</div></div>
+  <div class="kpi"><div class="n"><%= overview.totals.sentToday %></div><div class="l">sent today</div></div>
+  <div class="kpi good"><div class="n"><%= overview.totals.inbox7d %></div><div class="l">inbox · 7 days</div></div>
+  <div class="kpi <%= overview.totals.spam7d ? 'bad' : '' %>"><div class="n"><%= overview.totals.spam7d %></div><div class="l">spam · 7 days</div></div>
+  <div class="kpi <%= overview.totals.missing7d ? 'bad' : '' %>"><div class="n"><%= overview.totals.missing7d %></div><div class="l">missing · 7 days</div></div>
+  <div class="kpi <%= overview.pool.reachable < overview.pool.minSize ? 'bad' : '' %>"><div class="n"><%= overview.pool.reachable %></div><div class="l">pool size<% if (overview.org.poolScope === 'instance' && overview.pool.instance !== overview.pool.reachable) { %> (<%= overview.pool.instance %> on instance)<% } %></div></div>
+</div>
+
+<% if (overview.pool.reachable > 0 && overview.pool.reachable < 5) { %>
+<div class="alert error" style="margin-top:0.8rem">
+  The pool has <%= overview.pool.reachable %> mailbox<%= overview.pool.reachable === 1 ? '' : 'es' %>. Warmup works from two, but the same few mailboxes keep talking to each other; five or more looks far more natural. <% if (overview.pool.reachable < overview.pool.minSize) { %><strong>Below the minimum of <%= overview.pool.minSize %>: nothing is being sent.</strong><% } %>
+</div>
+<% } %>
+
+<h2>Mailboxes</h2>
+<form method="post" action="/ui/warmup/bulk" id="bulk">
+  <input type="hidden" name="_csrf" value="<%= csrf %>">
+  <div class="card">
+    <% if (overview.accounts.length === 0) { %>
+      <p class="muted">No mailboxes connected yet. <a href="/ui">Connect one</a>, then enable warmup here.</p>
+    <% } else { %>
+    <div class="bulkbar">
+      <label class="muted"><input type="checkbox" onclick="document.querySelectorAll('input[name=accountIds]').forEach(c => c.checked = this.checked)"> select all</label>
+      <span class="muted">With selected:</span>
+      <button type="submit" name="action" value="enable">Enable</button>
+      <button type="submit" name="action" value="pause" class="secondary">Pause</button>
+      <button type="submit" name="action" value="resume" class="secondary">Resume</button>
+      <button type="submit" name="action" value="disable" class="secondary">Disable</button>
+      <button type="submit" name="action" value="clear_overrides" class="secondary" title="Remove every per-mailbox setting so the workspace defaults apply">Clear overrides</button>
+    </div>
+    <div style="overflow-x:auto">
+    <table>
+      <tr>
+        <th></th><th>Mailbox</th><th>State</th><th class="num">Day</th><th class="num">Today</th><th class="num">Received</th>
+        <th class="num">Inbox 7d</th><th class="num">Spam 7d</th><th class="num">Rescued</th><th class="num">Replies</th><th>Last event</th>
+      </tr>
+      <% for (const a of overview.accounts) { %>
+      <tr class="<%= a.enabled ? '' : 'dim' %>">
+        <td><input type="checkbox" name="accountIds" value="<%= a.accountId %>"></td>
+        <td>
+          <a href="/ui/accounts/<%= a.accountId %>"><%= a.email %></a>
+          <span class="muted"><%= a.provider %></span>
+          <% if (a.accountStatus !== 'active') { %><span class="badge <%= a.accountStatus %>"><%= a.accountStatus %></span><% } %>
+          <% if (a.enabled && !a.canWrite) { %><span class="badge failed" title="Connected without mailbox-write access: cannot mark read, star, or rescue from spam. Reconnect to fix.">no write scope</span><% } %>
+        </td>
+        <td>
+          <span class="badge <%= a.state %>"><%= stateLabel(a.state) %></span>
+          <% if (a.throttlePercent < 100 && (a.state === 'ramping' || a.state === 'steady')) { %><span class="muted" title="Volume reduced by the reputation controller"><%= a.throttlePercent %>%</span><% } %>
+          <% if (a.pauseReason && (a.state === 'auto_paused' || a.state === 'paused')) { %><div class="muted" style="max-width:26ch"><%= a.pauseReason %></div><% } %>
+        </td>
+        <td class="num"><%= a.enabled ? a.rampDay : '—' %></td>
+        <td class="num"><%= a.todaySent %><span class="muted">/<%= a.todayTarget %></span></td>
+        <td class="num"><%= a.todayReceived %><span class="muted">/<%= a.receiveLimit %></span></td>
+        <td class="num"><span class="rate <%= a.inboxRate7d === null ? '' : a.inboxRate7d >= 90 ? 'good' : a.inboxRate7d >= 75 ? 'warn' : 'bad' %>"><%= fmtPct(a.inboxRate7d) %></span>
+          <% if (a.placement7d.total) { %><span class="muted">(<%= a.placement7d.inbox + a.placement7d.category %>/<%= a.placement7d.inbox + a.placement7d.category + a.placement7d.spam + a.placement7d.missing %>)</span><% } %></td>
+        <td class="num"><%= a.placement7d.spam %><% if (a.placement7d.missing) { %> <span class="muted" title="missing">+<%= a.placement7d.missing %>m</span><% } %></td>
+        <td class="num"><%= a.rescued7d %></td>
+        <td class="num"><%= a.repliesSent7d %><% if (a.forwards7d) { %> <span class="muted" title="forwards">+<%= a.forwards7d %>f</span><% } %></td>
+        <td class="muted" style="max-width:30ch">
+          <% if (a.lastEvent) { %><span title="<%= fmtWhen(a.lastEvent.at) %>"><%= a.lastEvent.action %></span> <%= a.lastEvent.detail ? '· ' + a.lastEvent.detail.slice(0, 60) : '' %><% } else { %>—<% } %>
+        </td>
+      </tr>
+      <% } %>
+    </table>
+    </div>
+
+    <details class="panel">
+      <summary>Apply settings to selected mailboxes</summary>
+      <p class="muted" style="margin:0.4rem 0 0.8rem">Sets a per-mailbox override for each field you fill in, on every mailbox ticked above. Placeholders show the workspace default.</p>
+      <%- include('_warmup-fields', { fields, values: {}, baseline: orgResolved, mode: 'bulk', sources: null }) %>
+      <button type="submit" name="action" value="settings" style="margin-top:0.8rem">Apply to selected</button>
+    </details>
+    <% } %>
+  </div>
+</form>
+
+<h2>Workspace defaults</h2>
+<form method="post" action="/ui/warmup/defaults">
+  <input type="hidden" name="_csrf" value="<%= csrf %>">
+  <input type="hidden" name="_settingsForm" value="1">
+  <div class="card">
+    <div class="row" style="gap:1.4rem; align-items:flex-start">
+      <div>
+        <label class="muted" style="display:block; font-size:0.78rem">Pool scope</label>
+        <select name="poolScope">
+          <option value="instance" <%= overview.org.poolScope === 'instance' ? 'selected' : '' %>>Instance: pair with every mailbox on this proxy</option>
+          <option value="org" <%= overview.org.poolScope === 'org' ? 'selected' : '' %>>This workspace only</option>
+        </select>
+      </div>
+      <div>
+        <label class="muted" style="display:block; font-size:0.78rem">Filter tag <span title="Stamped as the last line of every warmup message so external tools can filter it. Changing it keeps the old one matching for 30 days.">ⓘ</span></label>
+        <input class="tagbox" name="filterTag" value="<%= overview.org.filterTag || '' %>" placeholder="generated on first enable" maxlength="16" style="width:12ch">
+      </div>
+      <div>
+        <label class="muted" style="display:block; font-size:0.78rem">Visibility</label>
+        <label style="font-size:0.85rem"><input type="checkbox" name="emitWebhooks" value="1" <%= overview.org.emitWebhooks ? 'checked' : '' %>> deliver <code>warmup.*</code> webhook events</label><br>
+        <label style="font-size:0.85rem"><input type="checkbox" name="showInSendLog" value="1" <%= overview.org.showInSendLog ? 'checked' : '' %>> show warmup mail in the send log</label>
+      </div>
+      <div>
+        <label class="muted" style="display:block; font-size:0.78rem">Daily cap</label>
+        <span style="font-size:0.9rem"><%= overview.org.dailyCap %> per mailbox<% if (overview.org.dailyCap < instanceCap) { %> <span class="muted">(plan limit)</span><% } %></span>
+      </div>
+    </div>
+    <details class="panel" open>
+      <summary>Default settings for every mailbox in this workspace</summary>
+      <div style="margin-top:0.6rem">
+      <%- include('_warmup-fields', { fields, values: orgValues, baseline: instanceDefaults, mode: 'defaults', sources: null }) %>
+      </div>
+    </details>
+    <button type="submit" style="margin-top:0.8rem">Save workspace defaults</button>
+  </div>
+</form>
+
+<h2>Content</h2>
+<div class="card">
+  <% const mix = overview.content.mix; const totalMix = mix.llm + mix.template; %>
+  <p class="muted" style="margin-top:0">
+    <% if (llm.configured) { %>
+      Conversations are written by <code><%= llmModel %></code> in batches and kept in a pool; the bundled templates cover gaps.
+      <% if (llm.breakerOpen) { %><span style="color:var(--err)">The API is failing right now; templates are in use until <%= fmtWhen(llm.openUntil) %>.</span><% } %>
+      Calls today: <%= llm.callsToday %>/<%= llm.budget %>.
+    <% } else { %>
+      No content API configured (<code>WARMUP_LLM_BASE_URL</code> / <code>WARMUP_LLM_API_KEY</code>); the bundled template corpus is used. Any OpenAI-compatible endpoint works.
+    <% } %>
+  </p>
+  <p style="margin:0">
+    Openers this week: <strong><%= totalMix %></strong>
+    <% if (totalMix) { %><span class="muted">· <%= Math.round((mix.llm / totalMix) * 100) %>% generated, <%= Math.round((mix.template / totalMix) * 100) %>% templates</span><% } %>
+  </p>
+</div>
+<%- include('_footer') %>

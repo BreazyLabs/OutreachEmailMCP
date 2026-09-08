@@ -87,6 +87,38 @@ const envSchema = z.object({
   HEALTH_REPORT_TO: z.string().optional(),
   HEALTH_REPORT_ALWAYS: boolFromEnv,
 
+  // --- Warmup engine ---
+  // Global kill switch: off stops every warmup loop; state is preserved.
+  WARMUP_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => v === undefined || v === 'true' || v === '1'),
+  // Hard ceiling on warmup sends per mailbox per day that no org or account
+  // setting can exceed.
+  WARMUP_MAX_DAILY_PER_ACCOUNT: z.coerce.number().int().min(1).default(50),
+  // Below this many opted-in mailboxes the pool cannot form pairs; the health
+  // check warns below 5 either way.
+  WARMUP_MIN_POOL_SIZE: z.coerce.number().int().min(2).default(2),
+  // Any OpenAI-compatible chat-completions endpoint for writing conversation
+  // scripts. Unset = the bundled template corpus only.
+  WARMUP_LLM_BASE_URL: z.string().url().optional(),
+  WARMUP_LLM_API_KEY: z.string().optional(),
+  WARMUP_LLM_MODEL: z.string().default('gpt-4o-mini'),
+  // Cost guard: LLM calls per UTC day, instance-wide.
+  WARMUP_LLM_DAILY_CALL_BUDGET: z.coerce.number().int().min(0).default(200),
+  // Unused scripts to keep on hand per language; topped up in batches of 20.
+  WARMUP_SCRIPT_POOL_MIN: z.coerce.number().int().min(0).default(60),
+  // How often each opted-in mailbox's Spam folder is listed.
+  WARMUP_SPAM_SWEEP_SECONDS: z.coerce.number().int().min(60).default(600),
+  // Sent but not seen in INBOX, Spam or a category by then = missing.
+  WARMUP_ARRIVAL_TIMEOUT_HOURS: z.coerce.number().min(1).default(6),
+  // A send task due longer ago than this when the engine gets to it is
+  // skipped rather than executed late (never burst after downtime).
+  WARMUP_TASK_GRACE_MINUTES: z.coerce.number().int().min(1).default(45),
+  // SaaS-mode per-mailbox daily warmup caps by plan.
+  PLAN_FREE_WARMUP_DAILY: z.coerce.number().int().min(0).default(10),
+  PLAN_PRO_WARMUP_DAILY: z.coerce.number().int().min(0).default(50),
+
   // How long transaction/audit log rows are kept
   ACTIVITY_RETENTION_DAYS: z.coerce.number().int().min(1).default(30),
   LOG_LEVEL: z.string().default('info'),

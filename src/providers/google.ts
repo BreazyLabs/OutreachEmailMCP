@@ -73,7 +73,55 @@ function toSummary(msg: GmailMessageMeta): MessageSummary {
     unread: msg.labelIds?.includes('UNREAD') ?? false,
     // format=metadata does not expose MIME parts; detail view reports attachments
     hasAttachments: false,
+    messageId: header(msg, 'Message-ID'),
   };
+}
+
+const CATEGORY_LABELS: Record<string, 'promotions' | 'social' | 'updates' | 'forums'> = {
+  CATEGORY_PROMOTIONS: 'promotions',
+  CATEGORY_SOCIAL: 'social',
+  CATEGORY_UPDATES: 'updates',
+  CATEGORY_FORUMS: 'forums',
+};
+
+// Label ids of user-created labels, per account, so a warmup cleanup that
+// files mail under "Warmup" does not list labels on every message.
+const labelIdCache = new Map<string, Map<string, string>>();
+
+async function ensureLabel(accountId: string, name: string): Promise<string> {
+  const cached = labelIdCache.get(accountId)?.get(name);
+  if (cached) return cached;
+  const res = await gmailFetch(accountId, `${API}/labels`);
+  const body = (await res.json()) as { labels?: { id: string; name: string }[] };
+  let id = body.labels?.find((l) => l.name.toLowerCase() === name.toLowerCase())?.id;
+  if (!id) {
+    const created = await gmailFetch(accountId, `${API}/labels`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name,
+        labelListVisibility: 'labelShow',
+        messageListVisibility: 'show',
+      }),
+    });
+    id = ((await created.json()) as { id: string }).id;
+  }
+  if (!labelIdCache.has(accountId)) labelIdCache.set(accountId, new Map());
+  labelIdCache.get(accountId)!.set(name, id);
+  return id;
+}
+
+async function modifyLabels(
+  accountId: string,
+  messageId: string,
+  addLabelIds: string[],
+  removeLabelIds: string[],
+): Promise<void> {
+  await gmailFetch(accountId, `${API}/messages/${messageId}/modify`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ addLabelIds, removeLabelIds }),
+  });
 }
 
 export const googleProvider: Provider = {
@@ -119,6 +167,43 @@ export const googleProvider: Provider = {
     });
   },
 
+  async getMessagePlacement(accountId, messageId) {
+    const res = await gmailFetch(accountId, `${API}/messages/${messageId}?format=minimal`);
+    const body = (await res.json()) as { labelIds?: string[] };
+    const labels = body.labelIds ?? [];
+    let category: 'primary' | 'promotions' | 'social' | 'updates' | 'forums' | null = null;
+    for (const l of labels) {
+      if (CATEGORY_LABELS[l]) category = CATEGORY_LABELS[l]!;
+    }
+    if (!category && labels.includes('CATEGORY_PERSONAL')) category = 'primary';
+    if (!category && labels.includes('INBOX')) category = 'primary';
+    return { category, important: labels.includes('IMPORTANT'), inSpam: labels.includes('SPAM') };
+  },
+
+  async setImportant(accountId, messageId, important) {
+    await modifyLabels(accountId, messageId, important ? ['IMPORTANT'] : [], important ? [] : ['IMPORTANT']);
+  },
+
+  async fixCategory(accountId, messageId) {
+    await modifyLabels(accountId, messageId, ['CATEGORY_PERSONAL'], Object.keys(CATEGORY_LABELS));
+  },
+
+  async archiveMessage(accountId, messageId) {
+    await modifyLabels(accountId, messageId, [], ['INBOX']);
+    return null;
+  },
+
+  async moveToNamedFolder(accountId, messageId, name) {
+    const labelId = await ensureLabel(accountId, name);
+    await modifyLabels(accountId, messageId, [labelId], ['INBOX']);
+    return null;
+  },
+
+  async trashMessage(accountId, messageId) {
+    await gmailFetch(accountId, `${API}/messages/${messageId}/trash`, { method: 'POST' });
+    return null;
+  },
+
   async sendRaw(accountId, raw) {
     const res = await gmailFetch(accountId, `${UPLOAD_API}/messages/send?uploadType=media`, {
       method: 'POST',
@@ -157,7 +242,7 @@ export const googleProvider: Provider = {
         ids.slice(i, i + CONCURRENCY).map(async (id) => {
           const r = await gmailFetch(
             accountId,
-            `${API}/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=Date`,
+            `${API}/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Subject&metadataHeaders=Date&metadataHeaders=Message-ID`,
           );
           return (await r.json()) as GmailMessageMeta;
         }),

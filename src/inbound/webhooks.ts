@@ -55,7 +55,21 @@ export interface SendOutcomePayload {
   };
 }
 
-export type WebhookPayload = MessageReceivedPayload | SendOutcomePayload;
+/** Warmup engine events; only delivered when the org opted in. */
+export interface WarmupPayload {
+  event:
+    | 'warmup.enabled'
+    | 'warmup.disabled'
+    | 'warmup.paused'
+    | 'warmup.resumed'
+    | 'warmup.throttled'
+    | 'warmup.spam_detected'
+    | 'warmup.rescued';
+  account: { id: string; email: string; provider: string };
+  warmup: Record<string, unknown>;
+}
+
+export type WebhookPayload = MessageReceivedPayload | SendOutcomePayload | WarmupPayload;
 
 /** Every event a webhook can subscribe to. */
 export const WEBHOOK_EVENTS = [
@@ -64,6 +78,13 @@ export const WEBHOOK_EVENTS = [
   'message.failed',
   'message.bounced',
   'message.replied',
+  'warmup.enabled',
+  'warmup.disabled',
+  'warmup.paused',
+  'warmup.resumed',
+  'warmup.throttled',
+  'warmup.spam_detected',
+  'warmup.rescued',
 ] as const;
 
 function isPrivateIp(ip: string): boolean {

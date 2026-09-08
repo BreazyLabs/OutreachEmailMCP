@@ -5,3 +5,5 @@ data-dev/
 data-test/
 .env
 *.log
+data-prodcopy/
+data-smoke/

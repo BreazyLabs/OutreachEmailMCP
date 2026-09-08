@@ -66,6 +66,7 @@ interface GraphMessage {
   bodyPreview?: string;
   isRead?: boolean;
   hasAttachments?: boolean;
+  internetMessageId?: string;
   '@removed'?: unknown;
 }
 
@@ -85,11 +86,55 @@ function toSummary(m: GraphMessage): MessageSummary {
     snippet: m.bodyPreview ?? null,
     unread: m.isRead === false,
     hasAttachments: m.hasAttachments ?? false,
+    messageId: m.internetMessageId ?? null,
   };
 }
 
 const SELECT_FIELDS =
-  'id,from,toRecipients,subject,receivedDateTime,bodyPreview,isRead,hasAttachments';
+  'id,from,toRecipients,subject,receivedDateTime,bodyPreview,isRead,hasAttachments,internetMessageId';
+
+// Well-known folder ids resolve to real ids per mailbox; cached so placement
+// checks and cleanup moves do not re-resolve them on every message.
+const folderIdCache = new Map<string, Map<string, string>>();
+
+async function resolveFolderId(accountId: string, wellKnownOrName: string, createIfMissing = false): Promise<string> {
+  const cached = folderIdCache.get(accountId)?.get(wellKnownOrName);
+  if (cached) return cached;
+  let id: string | undefined;
+  if (['inbox', 'junkemail', 'sentitems', 'archive', 'deleteditems'].includes(wellKnownOrName)) {
+    const res = await graphFetch(accountId, `${GRAPH}/me/mailFolders/${wellKnownOrName}?$select=id`);
+    id = ((await res.json()) as { id?: string }).id;
+  } else {
+    const params = new URLSearchParams({
+      $filter: `displayName eq '${wellKnownOrName.replaceAll("'", "''")}'`,
+      $select: 'id',
+    });
+    const res = await graphFetch(accountId, `${GRAPH}/me/mailFolders?${params}`);
+    id = ((await res.json()) as { value?: { id: string }[] }).value?.[0]?.id;
+    if (!id && createIfMissing) {
+      const created = await graphFetch(accountId, `${GRAPH}/me/mailFolders`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ displayName: wellKnownOrName }),
+      });
+      id = ((await created.json()) as { id?: string }).id;
+    }
+  }
+  if (!id) throw new PermanentError(`Graph folder "${wellKnownOrName}" not found`);
+  if (!folderIdCache.has(accountId)) folderIdCache.set(accountId, new Map());
+  folderIdCache.get(accountId)!.set(wellKnownOrName, id);
+  return id;
+}
+
+async function moveTo(accountId: string, messageId: string, destinationId: string): Promise<string | null> {
+  const res = await graphFetch(accountId, `${GRAPH}/me/messages/${encodeURIComponent(messageId)}/move`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ destinationId }),
+  });
+  const body = (await res.json()) as { id?: string };
+  return body.id ?? null;
+}
 
 export const microsoftProvider: Provider = {
   // Graph's REST request cap is 4 MB and sendMail takes base64 MIME (4/3
@@ -142,6 +187,58 @@ export const microsoftProvider: Provider = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
     });
+  },
+
+  async getMessagePlacement(accountId, messageId) {
+    const res = await graphFetch(
+      accountId,
+      `${GRAPH}/me/messages/${encodeURIComponent(messageId)}?$select=inferenceClassification,importance,parentFolderId`,
+    );
+    const body = (await res.json()) as {
+      inferenceClassification?: string;
+      importance?: string;
+      parentFolderId?: string;
+    };
+    let inSpam = false;
+    try {
+      inSpam = body.parentFolderId === (await resolveFolderId(accountId, 'junkemail'));
+    } catch {
+      // placement without the spam bit is still useful
+    }
+    return {
+      category: body.inferenceClassification === 'other' ? 'other' : 'primary',
+      important: body.importance === 'high',
+      inSpam,
+    };
+  },
+
+  async setImportant(accountId, messageId, important) {
+    await graphFetch(accountId, `${GRAPH}/me/messages/${encodeURIComponent(messageId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ importance: important ? 'high' : 'normal' }),
+    });
+  },
+
+  async fixCategory(accountId, messageId) {
+    await graphFetch(accountId, `${GRAPH}/me/messages/${encodeURIComponent(messageId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ inferenceClassification: 'focused' }),
+    });
+  },
+
+  async archiveMessage(accountId, messageId) {
+    return moveTo(accountId, messageId, 'archive');
+  },
+
+  async moveToNamedFolder(accountId, messageId, name) {
+    const folderId = await resolveFolderId(accountId, name, true);
+    return moveTo(accountId, messageId, folderId);
+  },
+
+  async trashMessage(accountId, messageId) {
+    return moveTo(accountId, messageId, 'deleteditems');
   },
 
   async sendRaw(accountId, raw) {

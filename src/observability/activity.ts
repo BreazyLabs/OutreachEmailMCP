@@ -13,7 +13,8 @@ export type ActivityCategory =
   | 'poll'
   | 'webhook'
   | 'oauth'
-  | 'health';
+  | 'health'
+  | 'warmup';
 
 export interface ActivityEvent {
   category: ActivityCategory;

@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { eq, desc, and } from 'drizzle-orm';
+import { eq, desc, and, ne } from 'drizzle-orm';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { db, schema } from '../db/index.js';
@@ -16,6 +16,11 @@ import {
 } from '../auth/connect-links.js';
 import { buildAccountsCsv, SEQUENCER_FORMATS } from '../export/accounts-csv.js';
 import { hasScope, type ApiScope } from '../api/plugin.js';
+import { listMessagesFiltered } from '../api/messages-read.js';
+import { orgWarmupOverview, accountWarmupDetail, recentWarmupMessages } from '../warmup/stats.js';
+import { applyAccountSettings, runBulk } from '../warmup/api.js';
+import { enableWarmup, disableWarmup, pauseWarmup, resumeWarmup, setPersona } from '../warmup/state.js';
+import { getOrg } from '../tenancy/orgs.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { logActivity } from '../observability/activity.js';
@@ -111,23 +116,19 @@ export function buildMcpServer(auth: McpAuth): McpServer {
 
     server.tool(
       'list_messages',
-      'List messages in a folder of a connected account. Returns summaries (from, subject, date, snippet) plus a nextPageToken for pagination.',
+      'List messages in a folder of a connected account. Returns summaries (from, subject, date, snippet) plus a nextPageToken for pagination. Warmup-pool traffic is excluded unless includeWarmup is set.',
       {
         accountId: z.string(),
         folder: z.string().optional().describe('Folder/label id; defaults to INBOX'),
         query: z.string().optional().describe('Provider search query (e.g. "from:alice")'),
         limit: z.number().int().min(1).max(100).optional(),
         pageToken: z.string().optional(),
+        includeWarmup: z.boolean().optional().describe('Include warmup-pool messages (default false)'),
       },
-      async ({ accountId, folder, query, limit, pageToken }) => {
+      async ({ accountId, folder, query, limit, pageToken, includeWarmup }) => {
         const account = accountFor(auth.orgId, accountId);
         return text(
-          await providerFor(account.provider).listMessages(account.id, {
-            folder,
-            query,
-            limit,
-            pageToken,
-          }),
+          await listMessagesFiltered(account, { folder, query, limit, pageToken }, includeWarmup ?? false),
         );
       },
     );
@@ -169,12 +170,14 @@ export function buildMcpServer(auth: McpAuth): McpServer {
         accountId: z.string(),
         status: z.enum(['queued', 'sending', 'sent', 'failed', 'cancelled']).optional(),
         limit: z.number().int().min(1).max(200).optional(),
+        includeWarmup: z.boolean().optional().describe('Include warmup-engine sends (default false)'),
       },
-      async ({ accountId, status, limit }) => {
+      async ({ accountId, status, limit, includeWarmup }) => {
         const account = accountFor(auth.orgId, accountId);
-        const where = status
-          ? and(eq(schema.sendJobs.accountId, account.id), eq(schema.sendJobs.status, status))
-          : eq(schema.sendJobs.accountId, account.id);
+        const conditions = [eq(schema.sendJobs.accountId, account.id)];
+        if (status) conditions.push(eq(schema.sendJobs.status, status));
+        if (!includeWarmup) conditions.push(ne(schema.sendJobs.source, 'warmup'));
+        const where = and(...conditions);
         const rows = db
           .select()
           .from(schema.sendJobs)
@@ -307,6 +310,94 @@ export function buildMcpServer(auth: McpAuth): McpServer {
         revokeConnectLinks(auth.orgId);
         return text({ revoked: true, url: createConnectHubLink(auth.orgId) });
       },
+    );
+  }
+
+  if (can('read')) {
+    server.tool(
+      'get_warmup_status',
+      'Warmup pool status for the workspace, or one mailbox in detail (state, ramp day, today\'s sends, 7-day inbox/spam placement, resolved settings, recent warmup messages).',
+      { accountId: z.string().optional() },
+      async ({ accountId }) => {
+        const org = getOrg(auth.orgId);
+        if (!org) throw new Error('Unknown organization');
+        if (accountId) {
+          const account = accountFor(auth.orgId, accountId);
+          return text(accountWarmupDetail(account, org));
+        }
+        const overview = orgWarmupOverview(org);
+        return text({
+          pool: overview.pool,
+          totals: overview.totals,
+          content: overview.content,
+          org: { poolScope: overview.org.poolScope, filterTag: overview.org.filterTag, dailyCap: overview.org.dailyCap },
+          accounts: overview.accounts.map((a) => ({
+            accountId: a.accountId,
+            email: a.email,
+            enabled: a.enabled,
+            state: a.state,
+            rampDay: a.rampDay,
+            todaySent: a.todaySent,
+            todayTarget: a.todayTarget,
+            inboxRate7d: a.inboxRate7d,
+            spamRate7d: a.spamRate7d,
+            throttlePercent: a.throttlePercent,
+            pauseReason: a.pauseReason,
+          })),
+        });
+      },
+    );
+    server.tool(
+      'list_warmup_messages',
+      'Warmup mail sent and received by a mailbox, with where each landed (inbox/spam/category/missing) and what happened to it (read, starred, replied, forwarded, rescued).',
+      { accountId: z.string(), limit: z.number().int().min(1).max(500).optional() },
+      async ({ accountId, limit }) => {
+        const account = accountFor(auth.orgId, accountId);
+        return text(recentWarmupMessages(account.id, limit ?? 50));
+      },
+    );
+  }
+
+  if (can('accounts')) {
+    server.tool(
+      'set_warmup',
+      'Enable, pause, resume or disable warmup for one mailbox, and/or change its warmup settings (partial; null clears an override) or persona.',
+      {
+        accountId: z.string(),
+        action: z.enum(['enable', 'pause', 'resume', 'disable']).optional(),
+        settings: z.record(z.unknown()).optional().describe('Partial WarmupSettings, e.g. {"dailyLimit": 40, "replyRate": 30}'),
+        persona: z
+          .object({
+            firstName: z.string().optional(),
+            lastName: z.string().nullable().optional(),
+            role: z.string().nullable().optional(),
+            company: z.string().nullable().optional(),
+            signOff: z.string().nullable().optional(),
+          })
+          .optional(),
+      },
+      async ({ accountId, action, settings, persona }) => {
+        const account = accountFor(auth.orgId, accountId);
+        if (settings) applyAccountSettings(account.id, settings);
+        if (persona) setPersona(account.id, persona);
+        if (action === 'enable') enableWarmup(account.id);
+        else if (action === 'pause') pauseWarmup(account.id);
+        else if (action === 'resume') resumeWarmup(account.id);
+        else if (action === 'disable') disableWarmup(account.id);
+        const org = getOrg(auth.orgId)!;
+        const detail = accountWarmupDetail(account, org);
+        return text({ summary: detail.summary, settings: detail.settings.settings });
+      },
+    );
+    server.tool(
+      'bulk_warmup',
+      'Apply one action (enable/pause/resume/disable/clear_overrides) and/or a settings patch to many mailboxes at once.',
+      {
+        accountIds: z.array(z.string()).min(1),
+        action: z.enum(['enable', 'disable', 'pause', 'resume', 'clear_overrides']).optional(),
+        settings: z.record(z.unknown()).optional(),
+      },
+      async ({ accountIds, action, settings }) => text(runBulk(auth.orgId, { accountIds, action, settings })),
     );
   }
 

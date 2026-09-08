@@ -12,6 +12,7 @@ import { loadTlsMaterial } from '../smtp/certs.js';
 import { countAccounts, countSendsLast24h, planLimits } from '../tenancy/orgs.js';
 import { buildMime } from '../api/messages-send.js';
 import { enqueueSend } from '../queue/sendQueue.js';
+import { orgWarmupOverview, stalledAccounts, warmupTaskFailures24h } from '../warmup/stats.js';
 import type { Account, Org } from '../db/schema.js';
 
 // A daily sweep over everything that can quietly stop working: mailbox access,
@@ -319,6 +320,103 @@ function checkRecentFailures(orgId: string): Finding[] {
   ];
 }
 
+// Warmup: a mailbox auto-paused for placement is the one thing that really
+// needs a human; the rest are early warnings that the pool is not doing what
+// the settings say it should.
+function checkWarmup(org: Org): Finding[] {
+  if (!config.WARMUP_ENABLED) return [];
+  const findings: Finding[] = [];
+  let overview: ReturnType<typeof orgWarmupOverview>;
+  try {
+    overview = orgWarmupOverview(org);
+  } catch (err) {
+    return [{ severity: 'warning', area: 'warmup', title: 'Warmup status could not be read', detail: String(err) }];
+  }
+  const enabled = overview.accounts.filter((a) => a.enabled);
+  if (!enabled.length) return [];
+  for (const a of enabled) {
+    if (a.state === 'auto_paused') {
+      findings.push({
+        severity: 'critical',
+        area: 'warmup',
+        title: `${a.email} warmup auto-paused`,
+        detail: `${a.pauseReason ?? 'Placement degraded.'} Resumes ${a.pausedUntil ? fmtAge(Date.now() - a.pausedUntil).replace(' ago', ' from now') : 'after the cooldown'}.`,
+      });
+    } else if (a.throttlePercent < 100 && (a.state === 'ramping' || a.state === 'steady')) {
+      findings.push({
+        severity: 'warning',
+        area: 'warmup',
+        title: `${a.email} warmup throttled to ${a.throttlePercent}%`,
+        detail: `7-day spam/missing rate ${a.spamRate7d ?? '?'}%. The ramp is held until three clean days pass.`,
+      });
+    }
+    if (!a.canWrite) {
+      findings.push({
+        severity: 'warning',
+        area: 'warmup',
+        title: `${a.email} cannot engage with warmup mail`,
+        detail: 'Connected without mailbox-write access: it sends and replies, but cannot mark read, star, or rescue from spam. Reconnect to grant it.',
+      });
+    }
+  }
+  if (overview.pool.reachable < 5) {
+    findings.push({
+      severity: overview.pool.reachable < overview.pool.minSize ? 'critical' : 'warning',
+      area: 'warmup',
+      title: `Warmup pool has only ${overview.pool.reachable} mailbox${overview.pool.reachable === 1 ? '' : 'es'}`,
+      detail:
+        overview.pool.reachable < overview.pool.minSize
+          ? 'Below the minimum: nothing is being sent. Connect and enable more mailboxes.'
+          : 'A small pool means the same few mailboxes keep talking to each other; five or more works much better.',
+    });
+  }
+  const stalled = stalledAccounts(org.id);
+  if (stalled.length) {
+    findings.push({
+      severity: 'warning',
+      area: 'warmup',
+      title: `${stalled.length} enabled mailbox${stalled.length === 1 ? '' : 'es'} sent no warmup mail for 2 days`,
+      detail: stalled.map((s) => s.email).slice(0, 5).join(', ') + '. Check the pool size, send window and the activity log.',
+    });
+  }
+  const decided = overview.totals.inbox7d + overview.totals.spam7d + overview.totals.missing7d;
+  if (decided >= 20 && overview.totals.missing7d / decided > 0.05) {
+    findings.push({
+      severity: 'warning',
+      area: 'warmup',
+      title: `${Math.round((overview.totals.missing7d / decided) * 100)}% of warmup mail went missing this week`,
+      detail: 'Sent, but never seen in the partner inbox or spam folder. Usually a partner mailbox that stopped polling, or silent drops at the receiving provider.',
+    });
+  }
+  if (overview.content.llm.configured && overview.content.llm.breakerOpen) {
+    findings.push({
+      severity: 'warning',
+      area: 'warmup',
+      title: 'Warmup content API is failing',
+      detail: 'The LLM circuit breaker is open; conversations fall back to the bundled templates until it recovers.',
+    });
+  }
+  const mix = overview.content.mix;
+  if (overview.content.llm.configured && mix.llm + mix.template >= 20 && mix.template / (mix.llm + mix.template) > 0.5) {
+    findings.push({
+      severity: 'warning',
+      area: 'warmup',
+      title: 'More than half of warmup content came from templates this week',
+      detail: 'The LLM pool is not keeping up. Check the API key, budget (WARMUP_LLM_DAILY_CALL_BUDGET) and the activity log.',
+    });
+  }
+  const failures = warmupTaskFailures24h(org.id);
+  if (failures >= 5) {
+    findings.push({
+      severity: 'warning',
+      area: 'warmup',
+      title: `${failures} warmup actions gave up in the last 24h`,
+      detail: `Filter the activity log on "warmup" for the errors: ${config.BASE_URL.replace(/\/$/, '')}/ui/activity?category=warmup&status=failed`,
+    });
+  }
+  return findings;
+}
+
 // --- report assembly and delivery -----------------------------------------
 
 export async function runHealthCheck(org: Org, includeInfrastructure: boolean): Promise<HealthReport> {
@@ -335,6 +433,7 @@ export async function runHealthCheck(org: Org, includeInfrastructure: boolean): 
     ...checkInboundPolling(accounts),
     ...checkWebhooks(org.id),
     ...checkQuotas(org),
+    ...checkWarmup(org),
     ...checkRecentFailures(org.id),
     ...(includeInfrastructure ? checkInfrastructure() : []),
   ];

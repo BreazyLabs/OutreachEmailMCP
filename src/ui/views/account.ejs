@@ -60,6 +60,142 @@
   <% } %>
 </div>
 
+
+<%
+  const w = typeof warmup !== 'undefined' ? warmup : null;
+  const ws = w ? w.summary : null;
+  const stateLabel = (s) => ({ off: 'off', ramping: 'ramping', steady: 'steady', paused: 'paused', auto_paused: 'auto-paused', blocked_upstream: 'blocked' })[s] || s;
+  const fmtWhen = (t) => t ? new Date(t).toLocaleString() : '—';
+  const landedClass = (l) => l === 'inbox' ? 'active' : (l === 'spam' || l === 'missing' || l === 'bounced') ? 'failed' : l ? 'queued' : '';
+%>
+<style>
+  .badge.ramping { background:color-mix(in srgb, var(--warn) 15%, transparent); color:var(--warn); }
+  .badge.steady { background:color-mix(in srgb, var(--ok) 15%, transparent); color:var(--ok); }
+  .badge.paused, .badge.off { background:color-mix(in srgb, var(--muted) 15%, transparent); color:var(--muted); }
+  .badge.auto_paused, .badge.blocked_upstream { background:color-mix(in srgb, var(--err) 15%, transparent); color:var(--err); }
+  .wstats { display:flex; gap:1.4rem; flex-wrap:wrap; margin:0.6rem 0; font-size:0.9rem; }
+  .wstats b { font-variant-numeric:tabular-nums; }
+  .persona-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:0.6rem; }
+  .persona-grid label { display:block; font-size:0.75rem; color:var(--muted); }
+  .persona-grid input { width:100%; }
+  details.panel summary { cursor:pointer; font-weight:600; font-size:0.9rem; }
+  .flags { color:var(--muted); font-size:0.78rem; white-space:nowrap; }
+</style>
+<h2>Warmup</h2>
+<div class="card">
+<% if (ws) { %>
+  <div class="row" style="justify-content:space-between; align-items:flex-start">
+    <div>
+      <span class="badge <%= ws.state %>"><%= stateLabel(ws.state) %></span>
+      <% if (ws.enabled) { %>
+        <span class="muted">day <%= ws.rampDay %> · target <%= ws.todayTarget %>/day (limit <%= ws.dailyLimit %>) · window in <%= ws.timezone %></span>
+        <% if (ws.throttlePercent < 100 && (ws.state === 'ramping' || ws.state === 'steady')) { %><span class="badge queued" title="Reputation controller reduced volume">throttled <%= ws.throttlePercent %>%</span><% } %>
+      <% } else { %>
+        <span class="muted">Not in the pool. Enable to start exchanging warmup mail with the other mailboxes on this proxy.</span>
+      <% } %>
+      <% if (ws.pauseReason && (ws.state === 'auto_paused' || ws.state === 'paused')) { %><div class="muted" style="margin-top:0.3rem"><%= ws.pauseReason %><% if (ws.pausedUntil) { %> · resumes <%= fmtWhen(ws.pausedUntil) %><% } %></div><% } %>
+      <% if (ws.enabled && !ws.canWrite) { %><div class="muted" style="margin-top:0.3rem; color:var(--err)">No mailbox-write access: this mailbox sends and replies but cannot mark read, star, or rescue from spam. Reconnect to grant it.</div><% } %>
+    </div>
+    <div class="row">
+      <% if (!ws.enabled) { %>
+        <form class="inline" method="post" action="/ui/accounts/<%= account.id %>/warmup/enable"><input type="hidden" name="_csrf" value="<%= csrf %>"><button type="submit" <%= account.status !== 'active' ? 'disabled title="Account is not active"' : '' %>>Enable warmup</button></form>
+      <% } else { %>
+        <% if (ws.state === 'paused' || ws.state === 'auto_paused') { %>
+          <form class="inline" method="post" action="/ui/accounts/<%= account.id %>/warmup/resume"><input type="hidden" name="_csrf" value="<%= csrf %>"><button type="submit">Resume</button></form>
+        <% } else if (ws.state === 'ramping' || ws.state === 'steady') { %>
+          <form class="inline" method="post" action="/ui/accounts/<%= account.id %>/warmup/pause"><input type="hidden" name="_csrf" value="<%= csrf %>"><button type="submit" class="secondary">Pause</button></form>
+        <% } %>
+        <form class="inline" method="post" action="/ui/accounts/<%= account.id %>/warmup/disable" onsubmit="return confirm('Disable warmup for <%= account.email %>? Pending conversations are dropped; history is kept.')"><input type="hidden" name="_csrf" value="<%= csrf %>"><button type="submit" class="danger">Disable</button></form>
+      <% } %>
+    </div>
+  </div>
+  <% if (ws.enabled) { %>
+  <div class="wstats">
+    <span>Today <b><%= ws.todaySent %></b><span class="muted">/<%= ws.todayTarget %></span> sent, <b><%= ws.todayReceived %></b><span class="muted">/<%= ws.receiveLimit %></span> received</span>
+    <span>7 days: inbox <b><%= ws.placement7d.inbox + ws.placement7d.category %></b> · spam <b style="<%= ws.placement7d.spam ? 'color:var(--err)' : '' %>"><%= ws.placement7d.spam %></b> · missing <b><%= ws.placement7d.missing %></b> · pending <b><%= ws.placement7d.pending %></b><% if (ws.inboxRate7d !== null) { %> · <b><%= ws.inboxRate7d.toFixed(0) %>%</b> inbox rate<% } %></span>
+    <span>rescued <b><%= ws.rescued7d %></b> · replies <b><%= ws.repliesSent7d %></b> · forwards <b><%= ws.forwards7d %></b> · receipts <b><%= ws.receipts7d %></b></span>
+    <span class="muted"><%= ws.pendingTasks %> queued action<%= ws.pendingTasks === 1 ? '' : 's' %></span>
+  </div>
+  <% if (w.daily.length > 1) { %>
+  <details class="panel">
+    <summary>Daily history</summary>
+    <table style="margin-top:0.5rem">
+      <tr><th>Day</th><th>Sent</th><th>Replies</th><th>Received</th><th>Inbox</th><th>Spam</th><th>Category</th><th>Missing</th></tr>
+      <% for (const d of [...w.daily].reverse()) { %>
+      <tr><td class="muted"><%= d.date %></td><td><%= d.sent %></td><td><%= d.replies %></td><td><%= d.received %></td><td><%= d.inbox + d.category %></td><td style="<%= d.spam ? 'color:var(--err)' : '' %>"><%= d.spam %></td><td><%= d.category %></td><td style="<%= d.missing ? 'color:var(--err)' : '' %>"><%= d.missing %></td></tr>
+      <% } %>
+    </table>
+  </details>
+  <% } %>
+  <% if (w.schedule.length) { %>
+  <details class="panel">
+    <summary>Queued actions (<%= w.schedule.length %>)</summary>
+    <table style="margin-top:0.5rem">
+      <tr><th>When</th><th>Action</th><th>With</th></tr>
+      <% for (const t of w.schedule.slice(0, 40)) { %>
+      <tr><td class="muted"><%= fmtWhen(t.dueAt) %></td><td><%= t.kind.replace('_', ' ') %><%= t.status === 'claimed' ? ' (running)' : '' %></td><td><%= t.counterparty || '—' %></td></tr>
+      <% } %>
+    </table>
+  </details>
+  <% } %>
+  <% } %>
+
+  <details class="panel" style="margin-top:0.8rem">
+    <summary>Persona</summary>
+    <form method="post" action="/ui/accounts/<%= account.id %>/warmup/persona" style="margin-top:0.5rem">
+      <input type="hidden" name="_csrf" value="<%= csrf %>">
+      <p class="muted" style="margin:0 0 0.5rem">The name this mailbox writes as and is greeted by. Derived from the account; edit if it looks wrong.</p>
+      <div class="persona-grid">
+        <div><label>First name</label><input name="firstName" value="<%= w.persona.firstName %>" required></div>
+        <div><label>Last name</label><input name="lastName" value="<%= w.persona.lastName || '' %>"></div>
+        <div><label>Company</label><input name="company" value="<%= w.persona.company || '' %>"></div>
+        <div><label>Role</label><input name="role" value="<%= w.persona.role || '' %>"></div>
+        <div><label>Sign-off</label><input name="signOff" value="<%= w.persona.signOff || '' %>" placeholder="Best"></div>
+      </div>
+      <button type="submit" class="secondary" style="margin-top:0.6rem">Save persona</button>
+    </form>
+  </details>
+
+  <details class="panel" style="margin-top:0.8rem" <%= Object.keys(w.overrides).length ? 'open' : '' %>>
+    <summary>Settings for this mailbox<% if (Object.keys(w.overrides).length) { %> <span class="muted">(<%= Object.keys(w.overrides).length %> override<%= Object.keys(w.overrides).length === 1 ? '' : 's' %>)</span><% } %></summary>
+    <form method="post" action="/ui/accounts/<%= account.id %>/warmup/settings" style="margin-top:0.5rem">
+      <input type="hidden" name="_csrf" value="<%= csrf %>">
+      <%- include('_warmup-fields', { fields: warmupFields, values: w.overrides, baseline: orgResolved, mode: 'override', sources: w.settings.sources }) %>
+      <button type="submit" style="margin-top:0.8rem">Save mailbox settings</button>
+      <a class="muted" href="/ui/warmup" style="margin-left:0.8rem">Workspace defaults →</a>
+    </form>
+  </details>
+
+  <% if (w.messages.length) { %>
+  <details class="panel" style="margin-top:0.8rem" open>
+    <summary>Recent warmup mail</summary>
+    <div style="overflow-x:auto">
+    <table style="margin-top:0.5rem">
+      <tr><th>When</th><th></th><th>Kind</th><th>Subject</th><th>With</th><th>Landed</th><th>Engagement</th></tr>
+      <% for (const m of w.messages) { %>
+      <tr>
+        <td class="muted"><%= fmtWhen(m.sentAt || m.createdAt) %></td>
+        <td class="muted"><%= m.direction === 'sent' ? '→' : '←' %></td>
+        <td class="muted"><%= m.kind %><%= m.contentSource === 'llm' ? '' : m.contentSource === 'template' ? ' (tpl)' : '' %></td>
+        <td><%= m.subject %></td>
+        <td class="muted"><%= m.counterparty %></td>
+        <td>
+          <% if (m.failError) { %><span class="badge failed" title="<%= m.failError %>">not sent</span>
+          <% } else if (m.landed) { %><span class="badge <%= landedClass(m.landed) %>"><%= m.landed %></span><% if (m.rescuedAt) { %> <span class="muted">rescued</span><% } %>
+          <% } else if (m.sentAt) { %><span class="muted">in transit</span><% } else { %><span class="muted">queued</span><% } %>
+        </td>
+        <td class="flags">
+          <%= m.readAt ? 'read ' : '' %><%= m.starredAt ? '★ ' : '' %><%= m.repliedAt ? 'replied ' : '' %><%= m.forwardedAt ? 'forwarded ' : '' %><%= m.receiptSentAt ? 'receipt ' : '' %><%= m.cleanedAt ? 'tidied' : '' %>
+        </td>
+      </tr>
+      <% } %>
+    </table>
+    </div>
+  </details>
+  <% } %>
+<% } %>
+</div>
+
 <h2>Recent sends</h2>
 <div class="card">
   <% if (jobs.length === 0) { %><p class="muted">Nothing sent yet.</p><% } else { %>

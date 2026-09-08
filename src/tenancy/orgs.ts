@@ -94,7 +94,7 @@ export function countSendsLast24h(orgId: string): number {
   const row = sqlite
     .prepare(
       `SELECT COUNT(*) AS n FROM send_jobs j JOIN accounts a ON a.id = j.account_id
-       WHERE a.org_id = ? AND j.created_at > ?`,
+       WHERE a.org_id = ? AND j.created_at > ? AND j.source != 'warmup'`,
     )
     .get(orgId, Date.now() - 24 * 3600_000) as { n: number };
   return row.n;

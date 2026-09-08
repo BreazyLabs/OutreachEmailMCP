@@ -33,6 +33,8 @@ import { startSmtpServer } from './smtp/server.js';
 import { startImapServer } from './imap/server.js';
 import { startInboundPoller } from './inbound/poller.js';
 import { startWebhookWorker } from './inbound/webhooks.js';
+import { startWarmupEngine } from './warmup/index.js';
+import { registerWarmupRoutes } from './warmup/api.js';
 
 async function main() {
   runMigrations();
@@ -75,6 +77,7 @@ async function main() {
       registerSendLogRoutes(api);
       registerWebhookRoutes(api);
       registerStatsRoutes(api);
+      registerWarmupRoutes(api);
     },
     { prefix: '/api/v1' },
   );
@@ -103,9 +106,11 @@ async function main() {
   startTokenRefreshSweep();
   startActivityPruner();
   const stopHealthReporter = startHealthReporter();
+  const stopWarmup = startWarmupEngine();
 
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'shutting down');
+    stopWarmup();
     stopSendWorker();
     stopWebhookWorker();
     stopPoller();

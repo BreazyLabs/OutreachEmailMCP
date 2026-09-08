@@ -8,6 +8,7 @@ import { providerFor } from '../providers/index.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { logActivity } from '../observability/activity.js';
+import { isWarmupMessage } from '../warmup/identity.js';
 import type { Account, ImapMessage } from '../db/schema.js';
 
 // Emits ('indexed', accountId) whenever new messages land — IMAP IDLE hooks this.
@@ -56,7 +57,17 @@ function nextUid(accountId: string, folder: string): number {
   return row.next;
 }
 
-// Idempotent: returns the new row id, or null if already indexed.
+function headerText(parsed: ParsedMail, name: string): string | null {
+  const v = parsed.headers.get(name.toLowerCase());
+  if (!v) return null;
+  if (typeof v === 'string') return v;
+  const asAny = v as { text?: string };
+  return typeof asAny.text === 'string' ? asAny.text : String(v);
+}
+
+// Idempotent: returns the new row id, or null if already indexed. Warmup
+// traffic is flagged at index time (decided here unless the caller already
+// knows) so IMAP listings never show it.
 export function indexMessage(
   accountId: string,
   providerMessageId: string,
@@ -64,7 +75,17 @@ export function indexMessage(
   parsed: ParsedMail,
   folder = 'INBOX',
   localPath: string | null = null,
+  warmup?: boolean,
 ): string | null {
+  const isWarmup =
+    warmup ??
+    (localPath === null &&
+      isWarmupMessage({
+        messageId: parsed.messageId ?? null,
+        header: (name) => headerText(parsed, name),
+        subject: parsed.subject ?? null,
+        text: parsed.text ?? null,
+      }).warmup);
   const existing = db
     .select({ id: schema.imapMessages.id })
     .from(schema.imapMessages)
@@ -88,10 +109,11 @@ export function indexMessage(
       size: raw.length,
       envelopeJson: JSON.stringify(envelopeFromParsed(parsed)),
       localPath,
+      warmup: isWarmup ? 1 : 0,
       createdAt: Date.now(),
     })
     .run();
-  imapIndexEvents.emit('indexed', accountId);
+  if (!isWarmup) imapIndexEvents.emit('indexed', accountId);
   return id;
 }
 
@@ -156,12 +178,18 @@ export async function backfillAccount(account: Account): Promise<void> {
     .run();
 }
 
+// Warmup rows are never listed: a sequencer watching this mailbox must not
+// see pool chatter as replies, and its own warmup tool must not "rescue" ours.
 export function messagesFor(accountId: string, folder = 'INBOX'): ImapMessage[] {
   return db
     .select()
     .from(schema.imapMessages)
     .where(
-      and(eq(schema.imapMessages.accountId, accountId), eq(schema.imapMessages.folder, folder)),
+      and(
+        eq(schema.imapMessages.accountId, accountId),
+        eq(schema.imapMessages.folder, folder),
+        eq(schema.imapMessages.warmup, 0),
+      ),
     )
     .orderBy(asc(schema.imapMessages.uid))
     .all();

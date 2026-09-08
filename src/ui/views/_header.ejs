@@ -67,6 +67,7 @@
   <a href="/ui" class="<%= page === 'dashboard' ? 'active' : '' %>">Accounts</a>
   <a href="/ui/apikeys" class="<%= page === 'apikeys' ? 'active' : '' %>">API keys</a>
   <a href="/ui/webhooks" class="<%= page === 'webhooks' ? 'active' : '' %>">Webhooks</a>
+  <a href="/ui/warmup" class="<%= page === 'warmup' ? 'active' : '' %>">Warmup</a>
   <a href="/ui/sendlog" class="<%= page === 'sendlog' ? 'active' : '' %>">Send log</a>
   <a href="/ui/activity" class="<%= page === 'activity' ? 'active' : '' %>">Activity</a>
   <% if (typeof saasMode !== 'undefined' && saasMode) { %>
@@ -78,7 +79,7 @@
     <span class="badge active" title="Platform access: every workspace on this instance">super</span>
     <select name="orgId" onchange="this.form.submit()">
       <% (typeof orgs !== 'undefined' ? orgs : []).forEach(function (o) { %>
-      <option value="<%= o.id %>" <%= typeof orgName !== 'undefined' && o.name === orgName ? 'selected' : '' %>><%= o.name %> (<%= o.accounts %>)</option>
+      <option value="<%= o.id %>" <%= typeof orgId !== 'undefined' && o.id === orgId ? 'selected' : '' %>><%= o.name %> (<%= o.accounts %>)</option>
       <% }) %>
     </select>
     <a class="btn secondary" href="/ui/workspace/new">+ Workspace</a>

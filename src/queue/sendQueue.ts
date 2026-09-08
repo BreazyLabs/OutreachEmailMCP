@@ -22,17 +22,20 @@ export const queueEvents = new EventEmitter();
 // Throws QuotaError when the owning org is suspended or over its send limit.
 export function enqueueSend(input: {
   accountId: string;
-  source: 'api' | 'smtp';
+  source: 'api' | 'smtp' | 'warmup';
   raw: Buffer;
   envelope: Envelope;
   subject: string | null;
+  warmupMessageId?: string;
 }): SendJob {
   const account = db
     .select({ orgId: schema.accounts.orgId })
     .from(schema.accounts)
     .where(eq(schema.accounts.id, input.accountId))
     .get();
-  if (account) assertCanSend(account.orgId);
+  // Warmup has its own per-plan cap (enforced by the engine); it must not
+  // eat into the workspace's real send quota.
+  if (account && input.source !== 'warmup') assertCanSend(account.orgId);
   const id = nanoid();
   const rawPath = path.join(config.messagesDir, `${id}.eml`);
   const raw = ensureEnvelopeRecipients(input.raw, input.envelope.to);
@@ -44,6 +47,7 @@ export function enqueueSend(input: {
       id,
       accountId: input.accountId,
       source: input.source,
+      warmupMessageId: input.warmupMessageId ?? null,
       status: 'queued',
       rawPath,
       envelopeJson: JSON.stringify(input.envelope),
@@ -90,6 +94,7 @@ function rowToJob(r: Record<string, unknown>): SendJob {
     id: r.id,
     accountId: r.account_id,
     source: r.source,
+    warmupMessageId: r.warmup_message_id,
     status: r.status,
     rawPath: r.raw_path,
     envelopeJson: r.envelope_json,

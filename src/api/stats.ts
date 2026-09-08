@@ -49,6 +49,10 @@ const AGGREGATE = `
   JOIN accounts a ON a.id = j.account_id
 `;
 
+// Every aggregate below adds this: the warmup engine's own traffic must
+// never inflate a workspace's delivery numbers.
+const NOT_WARMUP = `j.source != 'warmup'`;
+
 /** Rates are only meaningful against what actually went out. */
 function withRates(row: StatsRow) {
   const delivered = row.sent;
@@ -75,7 +79,7 @@ export function registerStatsRoutes(app: FastifyInstance) {
     const since = windowStart(req.query);
     const orgId = orgOf(req);
     const total = sqlite
-      .prepare(`${AGGREGATE} WHERE a.org_id = ? AND j.created_at >= ?`)
+      .prepare(`${AGGREGATE} WHERE a.org_id = ? AND j.created_at >= ? AND ${NOT_WARMUP}`)
       .get(orgId, since) as StatsRow;
     const perAccount = sqlite
       .prepare(
@@ -88,7 +92,7 @@ export function registerStatsRoutes(app: FastifyInstance) {
                 COALESCE(SUM(j.bounce_type = 'soft'), 0)            AS softBounced,
                 COALESCE(SUM(j.replied_at IS NOT NULL), 0)          AS replied
          FROM send_jobs j JOIN accounts a ON a.id = j.account_id
-         WHERE a.org_id = ? AND j.created_at >= ?
+         WHERE a.org_id = ? AND j.created_at >= ? AND ${NOT_WARMUP}
          GROUP BY j.account_id`,
       )
       .all(orgId, since) as (StatsRow & {
@@ -116,7 +120,7 @@ export function registerStatsRoutes(app: FastifyInstance) {
       if (!account) return reply.code(404).send({ error: 'Account not found' });
       const since = windowStart(req.query);
       const row = sqlite
-        .prepare(`${AGGREGATE} WHERE j.account_id = ? AND j.created_at >= ?`)
+        .prepare(`${AGGREGATE} WHERE j.account_id = ? AND j.created_at >= ? AND ${NOT_WARMUP}`)
         .get(account.id, since) as StatsRow;
       // Daily series, so a dashboard can draw a trend without N calls.
       const daily = sqlite
@@ -127,7 +131,7 @@ export function registerStatsRoutes(app: FastifyInstance) {
                   COALESCE(SUM(j.bounced_at IS NOT NULL), 0) AS bounced,
                   COALESCE(SUM(j.replied_at IS NOT NULL), 0) AS replied
            FROM send_jobs j
-           WHERE j.account_id = ? AND j.created_at >= ?
+           WHERE j.account_id = ? AND j.created_at >= ? AND ${NOT_WARMUP}
            GROUP BY day ORDER BY day`,
         )
         .all(account.id, since);
@@ -153,7 +157,7 @@ export function registerStatsRoutes(app: FastifyInstance) {
                 j.bounce_type AS type, j.bounce_code AS code,
                 j.bounce_recipient AS recipient, j.bounce_diagnostic AS diagnostic
          FROM send_jobs j JOIN accounts a ON a.id = j.account_id
-         WHERE a.org_id = ? AND j.bounced_at IS NOT NULL AND j.bounced_at >= ?
+         WHERE a.org_id = ? AND j.bounced_at IS NOT NULL AND j.bounced_at >= ? AND ${NOT_WARMUP}
          ORDER BY j.bounced_at DESC LIMIT ?`,
       )
       .all(orgOf(req), since, limit);

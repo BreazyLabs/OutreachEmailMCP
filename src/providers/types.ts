@@ -13,6 +13,17 @@ export interface MessageSummary {
   snippet: string | null;
   unread: boolean;
   hasAttachments: boolean;
+  /** RFC822 Message-ID header, when the listing exposes it (used to filter
+   *  warmup traffic out of listings). */
+  messageId: string | null;
+}
+
+/** Where a message sits inside the recipient's mailbox beyond the folder:
+ *  Gmail's inbox categories, Outlook's Focused/Other split, importance. */
+export interface MessagePlacement {
+  category: 'primary' | 'promotions' | 'social' | 'updates' | 'forums' | 'other' | null;
+  important: boolean;
+  inSpam: boolean;
 }
 
 export interface ListMessagesOptions {
@@ -73,4 +84,21 @@ export interface Provider {
     messageId: string,
     flags: { seen?: boolean; flagged?: boolean },
   ): Promise<void>;
+
+  // --- warmup engagement: the things a person's mail client does ---
+
+  /** Category / importance / spam status of a message. */
+  getMessagePlacement(accountId: string, messageId: string): Promise<MessagePlacement>;
+  /** Gmail: IMPORTANT label. Graph: importance = high. */
+  setImportant(accountId: string, messageId: string, important: boolean): Promise<void>;
+  /** Gmail: Promotions/Social/Updates → Primary. Graph: Other → Focused. */
+  fixCategory(accountId: string, messageId: string): Promise<void>;
+  /** Remove from the inbox without deleting. Returns the new id when the
+   *  provider reassigns ids on move (Graph), else null. */
+  archiveMessage(accountId: string, messageId: string): Promise<string | null>;
+  /** Move into a user-visible label/folder by name, creating it if needed.
+   *  Returns the new id when reassigned. */
+  moveToNamedFolder(accountId: string, messageId: string, name: string): Promise<string | null>;
+  /** Trash (recoverable delete). Returns the new id when reassigned. */
+  trashMessage(accountId: string, messageId: string): Promise<string | null>;
 }

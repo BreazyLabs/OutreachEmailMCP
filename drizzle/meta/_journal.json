@@ -85,6 +85,13 @@
       "when": 1787763009184,
       "tag": "0011_strange_shotgun",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1788867131141,
+      "tag": "0012_pretty_archangel",
+      "breakpoints": true
     }
   ]
 }

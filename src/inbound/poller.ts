@@ -10,6 +10,8 @@ import { findSendJobByMessageId, recordBounce, recordReply } from './correlate.j
 import { indexMessage } from '../imap/index-store.js';
 import { logActivity } from '../observability/activity.js';
 import { isMailboxUnavailable } from '../providers/errors.js';
+import { onInboundMessage } from '../warmup/detector.js';
+import { onWarmupBounce } from '../warmup/ledger.js';
 import type { Account } from '../db/schema.js';
 
 async function pollAccount(account: Account): Promise<void> {
@@ -40,7 +42,17 @@ async function pollAccount(account: Account): Promise<void> {
     try {
       const raw = await provider.getMessageRaw(account.id, messageId);
       const parsed = await simpleParser(raw);
-      indexMessage(account.id, messageId, raw, parsed);
+
+      // Warmup traffic is recognised before anything else sees it: it is
+      // indexed hidden for IMAP, never fires webhooks, and never counts as a
+      // reply to a campaign. A person replying on a warmup thread is real
+      // mail and stays visible, but closes that thread.
+      const verdict = await onInboundMessage(account, messageId, parsed, raw);
+      indexMessage(account.id, messageId, raw, parsed, 'INBOX', null, verdict.warmup);
+      if (verdict.warmup) {
+        logger.debug({ account: account.email, messageId }, 'warmup message indexed (hidden)');
+        continue;
+      }
 
       // Delivery outcomes ride in on ordinary inbound mail: a DSN is the only
       // notice a bounce ever gets, and a reply is just mail that references
@@ -49,15 +61,20 @@ async function pollAccount(account: Account): Promise<void> {
       const classified = classifyInbound(parsed, raw.toString());
       if (classified.kind === 'bounce') {
         const job = findSendJobByMessageId(account.id, classified.originalMessageId);
+        if (job && job.source === 'warmup') {
+          onWarmupBounce(job, classified.recipient, classified.diagnostic);
+          indexMessage(account.id, messageId, raw, parsed, 'INBOX', null, true);
+          continue;
+        }
         if (job) recordBounce(account, job, classified);
         else
           logger.info(
             { account: account.email, messageId, code: classified.code },
             'bounce received for an unknown send (not sent through this proxy)',
           );
-      } else if (classified.kind === 'reply') {
+      } else if (classified.kind === 'reply' && !verdict.humanOnWarmupThread) {
         const job = findSendJobByMessageId(account.id, classified.inReplyTo);
-        if (job)
+        if (job && job.source !== 'warmup')
           recordReply(account, job, {
             messageId,
             from: parsed.from?.text ?? null,

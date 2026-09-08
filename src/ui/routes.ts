@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { and, desc, eq, gt } from 'drizzle-orm';
+import { and, desc, eq, gt, ne } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { db, schema } from '../db/index.js';
 import { config } from '../config.js';
@@ -7,6 +7,7 @@ import { generateApiKey, randomBase62 } from '../crypto/credentials.js';
 import { decryptSecret, encryptSecret } from '../crypto/secrets.js';
 import { isPrivateWebhookTarget } from '../inbound/webhooks.js';
 import { deleteAccountSpoolFiles } from '../queue/sendQueue.js';
+import { purgeAccountTasks } from '../warmup/tasks.js';
 import { createSmtpCredential, smtpAdvertisedHost } from '../smtp/credentials.js';
 import { buildAccountsCsv } from '../export/accounts-csv.js';
 import {
@@ -39,47 +40,15 @@ import {
   allOrgs,
 } from './session.js';
 
-type Req = FastifyRequest;
 type Rep = FastifyReply;
-
-function guard(req: Req, reply: Rep): SessionContext | null {
-  return requireUiSession(req, reply);
-}
-
-function guardPost(req: Req, reply: Rep): SessionContext | null {
-  const session = requireUiSession(req, reply);
-  if (!session) return null;
-  if (!verifyCsrf(req)) {
-    reply.code(403).send('Invalid CSRF token');
-    return null;
-  }
-  return session;
-}
-
-function baseLocals(req: Req, session?: SessionContext | null) {
-  return {
-    csrf: csrfTokenFor(req),
-    googleEnabled: config.googleEnabled,
-    microsoftEnabled: config.microsoftEnabled,
-    saasMode: config.SAAS_MODE,
-    stripeEnabled: config.stripeEnabled,
-    ssoEnabled: ssoEnabled(),
-    // Pocket ID is offered only to traffic that actually came through the
-    // tailnet gateway — id.internal does not resolve anywhere else, so
-    // showing the button publicly would be a dead end.
-    internalSso: internalSsoAvailable(req),
-    orgName: session?.org.name ?? null,
-    // Superadmins see every workspace and can switch between them; for
-    // everyone else these are absent and the nav renders as before.
-    superuser: session?.isSuperuser ?? false,
-    orgs: session?.isSuperuser ? allOrgs() : [],
-    baseUrl: config.BASE_URL.replace(/\/$/, ''),
-    error: (req.query as { error?: string }).error ?? null,
-    notice: ((req.query as { notice?: string }).notice ?? null) as string | null,
-  };
-}
+import { guard, guardPost, baseLocals } from './helpers.js';
+import { registerWarmupUiRoutes } from './warmup-routes.js';
+import { accountWarmupDetail } from '../warmup/stats.js';
+import { WARMUP_FIELDS, resolveWarmupSettings } from '../warmup/settings.js';
+import { config as appConfig } from '../config.js';
 
 export function registerUiRoutes(app: FastifyInstance) {
+  registerWarmupUiRoutes(app);
   // Public landing page; logged-in users go straight to the dashboard
   app.get('/', async (req, reply) => {
     if (hasValidUiSession(req)) return reply.redirect('/ui');
@@ -196,9 +165,10 @@ export function registerUiRoutes(app: FastifyInstance) {
       .select()
       .from(schema.sendJobs)
       .orderBy(desc(schema.sendJobs.createdAt))
-      .limit(50)
+      .limit(100)
       .all()
       .filter((j) => accountById.has(j.accountId))
+      .filter((j) => session.org.warmupShowInSendLog || j.source !== 'warmup')
       .slice(0, 10);
     return reply.view('dashboard.ejs', {
       ...baseLocals(req, session),
@@ -243,7 +213,11 @@ export function registerUiRoutes(app: FastifyInstance) {
     const jobs = db
       .select()
       .from(schema.sendJobs)
-      .where(eq(schema.sendJobs.accountId, account.id))
+      .where(
+        session.org.warmupShowInSendLog
+          ? eq(schema.sendJobs.accountId, account.id)
+          : and(eq(schema.sendJobs.accountId, account.id), ne(schema.sendJobs.source, 'warmup')),
+      )
       .orderBy(desc(schema.sendJobs.createdAt))
       .limit(25)
       .all();
@@ -258,11 +232,16 @@ export function registerUiRoutes(app: FastifyInstance) {
       .where(eq(schema.oauthTokens.accountId, account.id))
       .get();
     const warmupReady = providerFor(account.provider).supportsWrite(tokenRow?.scopes ?? '');
+    const warmup = accountWarmupDetail(account, session.org);
     return reply.view('account.ejs', {
       ...baseLocals(req, session),
       page: 'account',
       account,
       warmupReady,
+      warmup,
+      warmupFields: WARMUP_FIELDS,
+      orgResolved: resolveWarmupSettings(session.org, null).settings,
+      engineEnabled: appConfig.WARMUP_ENABLED,
       credentials: credentials.map((c) => {
         let password: string | null = null;
         try {
@@ -365,6 +344,7 @@ export function registerUiRoutes(app: FastifyInstance) {
         .get();
       if (!account) return reply.code(404).send('Unknown account');
       deleteAccountSpoolFiles(account.id);
+      purgeAccountTasks(account.id);
       db.delete(schema.accounts).where(eq(schema.accounts.id, account.id)).run();
       return reply.redirect('/ui');
     },
@@ -537,9 +517,10 @@ export function registerUiRoutes(app: FastifyInstance) {
       .select()
       .from(schema.sendJobs)
       .orderBy(desc(schema.sendJobs.createdAt))
-      .limit(500)
+      .limit(1000)
       .all()
       .filter((j) => accountById.has(j.accountId))
+      .filter((j) => session.org.warmupShowInSendLog || j.source !== 'warmup')
       .slice(0, 100);
     return reply.view('sendlog.ejs', {
       ...baseLocals(req, session),
