@@ -1,26 +1,22 @@
 <%#
   Warmup settings fields, grouped. Expects:
     fields    – WARMUP_FIELDS
-    values    – values set at THIS layer (partial), or {} for "apply to selected"
-    baseline  – resolved values from the layer above (placeholders)
-    mode      – 'defaults' | 'override' | 'bulk'
+    values    – values set at THIS layer (partial); {} for bulk
+    baseline  – resolved values from the layer above
+    mode      – 'defaults' | 'override' (pre-filled with the effective value)
+                | 'bulk' (blank = unchanged)
     sources   – optional map key → 'instance'|'org'|'account'|'cap'
 %>
 <%
   const groups = [];
   for (const f of fields) { if (!groups.includes(f.group)) groups.push(f.group); }
+  const prefill = mode !== 'bulk';
   const has = (k) => values && values[k] !== undefined && values[k] !== null;
-  const shown = (k) => {
-    const v = has(k) ? values[k] : undefined;
-    if (v === undefined) return '';
-    return Array.isArray(v) ? v.join(', ') : String(v);
-  };
-  const base = (k) => {
-    const v = baseline ? baseline[k] : undefined;
-    if (v === undefined || v === null) return '';
-    return Array.isArray(v) ? v.join(', ') : String(v);
-  };
-  const blankLabel = mode === 'bulk' ? '(unchanged)' : mode === 'override' ? '(inherit workspace default)' : '(instance default)';
+  const eff = (k) => (has(k) ? values[k] : baseline ? baseline[k] : undefined);
+  const str = (v) => (v === undefined || v === null ? '' : Array.isArray(v) ? v.join(', ') : String(v));
+  const shown = (k) => (prefill ? str(eff(k)) : has(k) ? str(values[k]) : '');
+  const base = (k) => str(baseline ? baseline[k] : undefined);
+  const layerName = mode === 'override' ? 'workspace default' : 'instance default';
 %>
 <style>
   .wf-groups { display:grid; grid-template-columns:repeat(auto-fill, minmax(300px, 1fr)); gap:1rem 1.4rem; }
@@ -29,8 +25,9 @@
   .wf-field label { font-size:0.85rem; }
   .wf-field .hint { display:block; color:var(--muted); font-size:0.72rem; line-height:1.25; }
   .wf-field input, .wf-field select { width:100%; padding:0.3rem 0.4rem; font-size:0.82rem; }
+  .wf-field input.set, .wf-field select.set { border-color:var(--accent); box-shadow: inset 2px 0 0 var(--accent); }
   .wf-field .src { font-size:0.68rem; color:var(--muted); }
-  .wf-field .src.account { color:var(--accent); font-weight:600; }
+  .wf-field .src.set { color:var(--accent); font-weight:600; }
   .wf-field .src.cap { color:var(--err); font-weight:600; }
   .wf-clear { text-align:center; }
   .wf-clear input { width:auto; }
@@ -40,38 +37,41 @@
   <div class="wf-group">
     <h4><%= g %></h4>
     <% for (const f of fields.filter((x) => x.group === g)) { %>
+    <% const isSet = prefill && has(f.key); const cls = isSet ? 'set' : ''; %>
     <div class="wf-field">
       <label for="<%= mode %>_<%= f.key %>">
         <%= f.label %>
-        <% if (sources && sources[f.key] && mode === 'override') { %><span class="src <%= sources[f.key] %>"><%= sources[f.key] === 'cap' ? 'capped by plan' : 'from ' + sources[f.key] %></span><% } %>
+        <% if (prefill) { %>
+          <% if (sources && sources[f.key] === 'cap') { %><span class="src cap">capped by plan</span>
+          <% } else if (isSet) { %><span class="src set" title="Set at this level; equal to the <%= layerName %> means inherit">overridden</span>
+          <% } else { %><span class="src"><%= layerName %></span><% } %>
+        <% } %>
         <% if (f.help) { %><span class="hint"><%= f.help %></span><% } %>
       </label>
       <% if (f.type === 'bool') { %>
-        <select id="<%= mode %>_<%= f.key %>" name="<%= f.key %>">
-          <option value="" <%= !has(f.key) ? 'selected' : '' %>><%= blankLabel %><%= base(f.key) ? ' · ' + (base(f.key) === 'true' ? 'on' : 'off') : '' %></option>
-          <option value="true" <%= has(f.key) && values[f.key] === true ? 'selected' : '' %>>On</option>
-          <option value="false" <%= has(f.key) && values[f.key] === false ? 'selected' : '' %>>Off</option>
+        <select id="<%= mode %>_<%= f.key %>" name="<%= f.key %>" class="<%= cls %>">
+          <% if (!prefill) { %><option value="" selected>(unchanged)<%= base(f.key) ? ' · ' + (base(f.key) === 'true' ? 'on' : 'off') : '' %></option><% } %>
+          <option value="true" <%= (prefill ? eff(f.key) === true : has(f.key) && values[f.key] === true) ? 'selected' : '' %>>On</option>
+          <option value="false" <%= (prefill ? eff(f.key) === false : has(f.key) && values[f.key] === false) ? 'selected' : '' %>>Off</option>
         </select>
       <% } else if (f.type === 'select') { %>
-        <select id="<%= mode %>_<%= f.key %>" name="<%= f.key %>">
-          <option value="" <%= !has(f.key) ? 'selected' : '' %>><%= blankLabel %><%= base(f.key) ? ' · ' + base(f.key) : '' %></option>
+        <select id="<%= mode %>_<%= f.key %>" name="<%= f.key %>" class="<%= cls %>">
+          <% if (!prefill) { %><option value="" selected>(unchanged)<%= base(f.key) ? ' · ' + base(f.key) : '' %></option><% } %>
           <% for (const o of f.options) { %>
-          <option value="<%= o.value %>" <%= has(f.key) && values[f.key] === o.value ? 'selected' : '' %>><%= o.label %></option>
+          <option value="<%= o.value %>" <%= (prefill ? eff(f.key) === o.value : has(f.key) && values[f.key] === o.value) ? 'selected' : '' %>><%= o.label %></option>
           <% } %>
         </select>
       <% } else if (f.type === 'time') { %>
-        <input id="<%= mode %>_<%= f.key %>" type="time" name="<%= f.key %>" value="<%= shown(f.key) %>" placeholder="<%= base(f.key) %>">
+        <input id="<%= mode %>_<%= f.key %>" type="time" name="<%= f.key %>" class="<%= cls %>" value="<%= shown(f.key) %>" placeholder="<%= base(f.key) %>">
       <% } else if (f.type === 'int' || f.type === 'percent' || f.type === 'number') { %>
-        <input id="<%= mode %>_<%= f.key %>" type="number" name="<%= f.key %>" value="<%= shown(f.key) %>" placeholder="<%= base(f.key) || '—' %>"
+        <input id="<%= mode %>_<%= f.key %>" type="number" name="<%= f.key %>" class="<%= cls %>" value="<%= shown(f.key) %>" placeholder="<%= base(f.key) || (prefill ? 'none' : '—') %>"
                <%= f.min !== undefined ? 'min="' + f.min + '"' : '' %> <%= f.max !== undefined ? 'max="' + f.max + '"' : '' %> step="<%= f.step ?? 1 %>">
       <% } else { %>
-        <input id="<%= mode %>_<%= f.key %>" type="text" name="<%= f.key %>" value="<%= shown(f.key) %>" placeholder="<%= base(f.key) || '—' %>">
+        <input id="<%= mode %>_<%= f.key %>" type="text" name="<%= f.key %>" class="<%= cls %>" value="<%= shown(f.key) %>" placeholder="<%= base(f.key) || '—' %>">
       <% } %>
       <div class="wf-clear">
-        <% if (mode !== 'bulk' && has(f.key)) { %>
-          <input type="checkbox" name="clear_<%= f.key %>" value="1" title="Reset to inherited value">
-        <% } else if (mode === 'bulk') { %>
-          <input type="checkbox" name="clear_<%= f.key %>" value="1" title="Clear this override on the selected mailboxes">
+        <% if (!prefill) { %>
+          <input type="checkbox" name="clear_<%= f.key %>" value="1" title="Clear this override on the selected mailboxes (back to the workspace default)">
         <% } %>
       </div>
     </div>
@@ -80,7 +80,6 @@
 <% } %>
 </div>
 <p class="muted" style="margin:0.6rem 0 0">
-  <% if (mode === 'bulk') { %>Blank fields are left unchanged. Tick the box next to a field to clear that override on the selected mailboxes instead.<% }
-     else if (mode === 'override') { %>Blank fields inherit the workspace default (shown as placeholder). Tick the box next to a set field to go back to inheriting.<% }
-     else { %>Blank fields use the instance default (shown as placeholder). Every mailbox inherits these unless it overrides a field.<% } %>
+  <% if (!prefill) { %>Blank fields are left unchanged. Tick the box next to a field to clear that override on the selected mailboxes instead.<% }
+     else { %>Every field shows the value in effect. Change what you want; a field left equal to the <%= layerName %> keeps inheriting it, and a blank means inherit. Fields marked <span class="src set">overridden</span> are set at this level.<% } %>
 </p>

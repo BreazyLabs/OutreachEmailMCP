@@ -22,6 +22,7 @@ import {
   getWarmupAccount,
 } from './state.js';
 import { setOrgTag, invalidateTagCache } from './identity.js';
+import { healthOf, orgHealth } from './health.js';
 import { logActivity } from '../observability/activity.js';
 
 const personaSchema = z
@@ -156,7 +157,12 @@ export function registerWarmupRoutes(app: FastifyInstance): void {
     if (!requireScope(req, reply, 'read')) return;
     const org = getOrg(orgOf(req));
     if (!org) return reply.code(404).send({ error: 'Unknown organization' });
-    return orgWarmupOverview(org);
+    const overview = orgWarmupOverview(org);
+    return {
+      ...overview,
+      health: orgHealth(overview.accounts),
+      accounts: overview.accounts.map((a) => ({ ...a, health: healthOf(a) })),
+    };
   });
 
   app.get('/warmup/fields', async (req, reply) => {
@@ -196,7 +202,8 @@ export function registerWarmupRoutes(app: FastifyInstance): void {
     const account = loadAccount(req.params.accountId, req);
     if (!account) return reply.code(404).send({ error: 'Unknown account' });
     const org = getOrg(account.orgId)!;
-    return accountWarmupDetail(account, org);
+    const detail = accountWarmupDetail(account, org);
+    return { ...detail, health: healthOf(detail.summary) };
   });
 
   app.put<{ Params: { accountId: string } }>('/accounts/:accountId/warmup', async (req, reply) => {

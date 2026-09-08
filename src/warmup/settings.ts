@@ -165,6 +165,23 @@ export function validatePatch(input: unknown): WarmupSettingsPatch {
   return out as WarmupSettingsPatch;
 }
 
+/**
+ * A form that shows every field pre-filled with the effective value must
+ * not turn every field into an override on save. Keep only what differs
+ * from the layer above; fields equal to it are cleared (null) so they keep
+ * inheriting.
+ */
+export function diffAgainstBaseline(patch: WarmupSettingsPatch, baseline: WarmupSettings): WarmupSettingsPatch {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined) continue;
+    const base = (baseline as Record<string, unknown>)[key];
+    const same = value !== null && JSON.stringify(value) === JSON.stringify(base);
+    out[key] = same ? null : value;
+  }
+  return out as WarmupSettingsPatch;
+}
+
 /** Apply a validated patch to a stored blob: null removes the key. */
 export function mergePatch(existingJson: string | null, patch: WarmupSettingsPatch): string {
   const current = parsePatch(existingJson) as Record<string, unknown>;

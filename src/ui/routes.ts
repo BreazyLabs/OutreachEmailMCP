@@ -44,6 +44,8 @@ type Rep = FastifyReply;
 import { guard, guardPost, baseLocals } from './helpers.js';
 import { registerWarmupUiRoutes } from './warmup-routes.js';
 import { accountWarmupDetail } from '../warmup/stats.js';
+import { healthOf, HEALTH_LABELS } from '../warmup/health.js';
+import { placementChartSvg, CHART_LEGEND } from './charts.js';
 import { WARMUP_FIELDS, resolveWarmupSettings } from '../warmup/settings.js';
 import { config as appConfig } from '../config.js';
 
@@ -239,6 +241,10 @@ export function registerUiRoutes(app: FastifyInstance) {
       account,
       warmupReady,
       warmup,
+      warmupHealth: healthOf(warmup.summary),
+      healthLabels: HEALTH_LABELS,
+      warmupChart: warmup.summary.enabled ? placementChartSvg(warmup.daily, 30, 760, 160) : null,
+      chartLegend: CHART_LEGEND,
       warmupFields: WARMUP_FIELDS,
       orgResolved: resolveWarmupSettings(session.org, null).settings,
       engineEnabled: appConfig.WARMUP_ENABLED,

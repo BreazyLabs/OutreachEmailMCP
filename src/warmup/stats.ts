@@ -162,8 +162,38 @@ export function poolInfo(org: Org): PoolInfo {
   return { reachable, instance, minSize: config.WARMUP_MIN_POOL_SIZE };
 }
 
+/** Per sender-local day across every mailbox in the org. */
+export function orgDailySeries(orgId: string, days = 30): DailyPoint[] {
+  const ids = db
+    .select({ id: schema.accounts.id })
+    .from(schema.accounts)
+    .where(eq(schema.accounts.orgId, orgId))
+    .all()
+    .map((r) => r.id);
+  const byDate = new Map<string, DailyPoint>();
+  for (const id of ids) {
+    for (const p of dailySeries(id, days)) {
+      const cur = byDate.get(p.date);
+      if (!cur) byDate.set(p.date, { ...p });
+      else {
+        cur.sent += p.sent;
+        cur.inbox += p.inbox;
+        cur.spam += p.spam;
+        cur.category += p.category;
+        cur.missing += p.missing;
+        cur.received += p.received;
+        cur.replies += p.replies;
+      }
+    }
+  }
+  return [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date)).slice(-days);
+}
+
 export interface OrgWarmupOverview {
   accounts: AccountWarmupSummary[];
+  /** 14-day per-mailbox series for row sparklines. */
+  sparks: Record<string, DailyPoint[]>;
+  daily: DailyPoint[];
   pool: PoolInfo;
   content: { mix: ReturnType<typeof contentSourceMix>; llm: ReturnType<typeof llmStatus> };
   org: {
@@ -174,7 +204,20 @@ export interface OrgWarmupOverview {
     defaults: ResolvedWarmupSettings;
     dailyCap: number;
   };
-  totals: { enabled: number; sentToday: number; inbox7d: number; spam7d: number; missing7d: number };
+  totals: {
+    enabled: number;
+    sentToday: number;
+    targetToday: number;
+    receivedToday: number;
+    inbox7d: number;
+    spam7d: number;
+    missing7d: number;
+    pending7d: number;
+    rescued7d: number;
+    replies7d: number;
+    forwards7d: number;
+    receipts7d: number;
+  };
 }
 
 export function orgWarmupOverview(org: Org): OrgWarmupOverview {
@@ -194,8 +237,12 @@ export function orgWarmupOverview(org: Org): OrgWarmupOverview {
   const warmById = new Map(warmRows.map((w) => [w.accountId, w]));
   const summaries = accounts.map((a) => summarizeAccount(a, org, warmById.get(a.id)));
   const defaults = resolveWarmupSettings(org, null);
+  const sparks: Record<string, DailyPoint[]> = {};
+  for (const a of accounts) sparks[a.id] = warmById.get(a.id)?.enabled ? dailySeries(a.id, 14) : [];
   return {
     accounts: summaries,
+    sparks,
+    daily: orgDailySeries(org.id, 30),
     pool: poolInfo(org),
     content: { mix: contentSourceMix(7), llm: llmStatus() },
     org: {
@@ -209,9 +256,16 @@ export function orgWarmupOverview(org: Org): OrgWarmupOverview {
     totals: {
       enabled: summaries.filter((s) => s.enabled).length,
       sentToday: summaries.reduce((n, s) => n + s.todaySent, 0),
+      targetToday: summaries.reduce((n, s) => n + s.todayTarget, 0),
+      receivedToday: summaries.reduce((n, s) => n + s.todayReceived, 0),
       inbox7d: summaries.reduce((n, s) => n + s.placement7d.inbox + s.placement7d.category, 0),
       spam7d: summaries.reduce((n, s) => n + s.placement7d.spam, 0),
       missing7d: summaries.reduce((n, s) => n + s.placement7d.missing, 0),
+      pending7d: summaries.reduce((n, s) => n + s.placement7d.pending, 0),
+      rescued7d: summaries.reduce((n, s) => n + s.rescued7d, 0),
+      replies7d: summaries.reduce((n, s) => n + s.repliesSent7d, 0),
+      forwards7d: summaries.reduce((n, s) => n + s.forwards7d, 0),
+      receipts7d: summaries.reduce((n, s) => n + s.receipts7d, 0),
     },
   };
 }

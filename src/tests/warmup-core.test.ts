@@ -54,6 +54,42 @@ describe('warmup settings', () => {
   });
 });
 
+describe('warmup health and prefilled forms', () => {
+  const base = {
+    accountId: 'a', email: 'a@x.test', provider: 'google', accountStatus: 'active', enabled: true,
+    state: 'steady' as const, rampDay: 9, startedAt: Date.now() - 10 * 86_400_000, todayTarget: 20, todaySent: 12,
+    todayReceived: 10, receiveLimit: 45, dailyLimit: 30,
+    placement7d: { inbox: 90, spam: 0, category: 0, missing: 0, bounced: 0, pending: 3, total: 93 },
+    inboxRate7d: 100, spamRate7d: 0, rescued7d: 0, repliesSent7d: 20, forwards7d: 2, receipts7d: 1,
+    throttlePercent: 100, pauseReason: null, pausedUntil: null, canWrite: true, pendingTasks: 4, lastEvent: null, timezone: 'UTC',
+  };
+  it('scores placement, interventions and scope, and rolls up by weight', async () => {
+    const { healthOf, orgHealth } = await import('../warmup/health.js');
+    expect(healthOf(base)).toMatchObject({ score: 100, label: 'healthy' });
+    const spammy = { ...base, placement7d: { ...base.placement7d, inbox: 80, spam: 10 } };
+    const h = healthOf(spammy);
+    expect(h.label).toBe('watch');
+    expect(h.score).toBe(67);
+    expect(h.reasons[0]).toContain('11% of sent warmup mail landed in spam');
+    expect(healthOf({ ...base, state: 'auto_paused' }).label).toBe('watch');
+    expect(healthOf({ ...base, state: 'auto_paused', canWrite: false, placement7d: { ...base.placement7d, bounced: 2 } }).label).toBe('at_risk');
+    expect(healthOf({ ...base, enabled: false, state: 'off' }).label).toBe('off');
+    expect(healthOf({ ...base, placement7d: { inbox: 2, spam: 0, category: 0, missing: 0, bounced: 0, pending: 1, total: 3 } }).label).toBe('no_data');
+    const stalled = { ...base, todaySent: 0, placement7d: { inbox: 0, spam: 0, category: 0, missing: 0, bounced: 0, pending: 0, total: 0 } };
+    expect(healthOf(stalled).label).toBe('at_risk');
+    const org = orgHealth([base, spammy, { ...base, enabled: false, state: 'off' as const }]);
+    expect(org.counts).toMatchObject({ healthy: 1, watch: 1, off: 1 });
+    expect(org.score).toBe(84); // weighted toward the two with data
+  });
+
+  it('keeps only real changes from a pre-filled form', async () => {
+    const { diffAgainstBaseline, INSTANCE_DEFAULTS, patchFromForm } = await import('../warmup/settings.js');
+    const patch = patchFromForm({ dailyLimit: '30', replyRate: '50', languages: 'en', weekdaysOnly: 'false' });
+    const diff = diffAgainstBaseline(patch, INSTANCE_DEFAULTS);
+    expect(diff).toEqual({ dailyLimit: null, replyRate: 50, languages: null, weekdaysOnly: null });
+  });
+});
+
 describe('warmup clock', () => {
   it('converts local wall-clock time to instants across a DST zone', async () => {
     const { localToInstant, localDate, localMinutes } = await import('../warmup/clock.js');

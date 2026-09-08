@@ -70,7 +70,9 @@ const envSchema = z.object({
   MICROSOFT_CLIENT_SECRET: z.string().optional(),
   MICROSOFT_TENANT: z.string().default('common'),
 
-  POLL_INTERVAL: z.coerce.number().int().min(10).default(60),
+  // Capped at 7 days: setInterval silently degrades to ~1 ms above 2^31-1
+  // milliseconds, which turns a "poll rarely" setting into a poll storm.
+  POLL_INTERVAL: z.coerce.number().int().min(10).max(604_800).default(60),
   // How long to keep the raw .eml of successfully sent mail (debugging grace);
   // after this it is deleted — the provider's Sent folder keeps the canonical copy
   SENT_RAW_RETENTION_HOURS: z.coerce.number().min(0).default(24),
