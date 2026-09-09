@@ -368,6 +368,36 @@ describe('warmup content', () => {
     expect([a.text === c.text, true]).toContain(true); // may differ, must not throw
   });
 
+  it('spins spintax deterministically and rotates common phrases otherwise', async () => {
+    const { spin } = await import('../warmup/content/scripts.js');
+    const { rngFrom } = await import('../warmup/rng.js');
+    const text = 'A {quick|short|brief} question about {next week|Friday}.';
+    const a = spin(text, rngFrom('s1'));
+    expect(a).toMatch(/^A (quick|short|brief) question about (next week|Friday)\.$/);
+    expect(spin(text, rngFrom('s1'))).toBe(a);
+    const seen = new Set(Array.from({ length: 30 }, (_, i) => spin(text, rngFrom('s', i))));
+    expect(seen.size).toBeGreaterThan(2);
+    const plain = 'Thanks, let me know if next week works. Sounds good.';
+    const variants = new Set(Array.from({ length: 30 }, (_, i) => spin(plain, rngFrom('p', i))));
+    expect(variants.size).toBeGreaterThan(2);
+    for (const v of variants) expect(v).not.toContain('{');
+  });
+
+  it('salvages complete scripts from truncated model output', async () => {
+    const { salvageObjects } = await import('../warmup/content/llm.js');
+    const cut = '{"scripts": [{"subject": "A", "turns": ["one \\"quoted\\" {x|y}"]}, {"subject": "B", "turns": ["two"]}, {"subject": "C", "turns": ["cut off he';
+    const got = salvageObjects(cut) as { subject: string }[];
+    expect(got.map((g) => g.subject)).toEqual(['A', 'B']);
+  });
+
+  it('accepts spintax from the model but rejects other braces', async () => {
+    const { validateScript } = await import('../warmup/content/llm.js');
+    const long = 'It has been a while since we last spoke and I wanted to see how things are going on your side of the office these days.';
+    expect(validateScript({ subject: 'Catching {up|on}', turns: [long + ' {Let me know|Tell me} when suits.'] }, 'en')).not.toBeNull();
+    expect(validateScript({ subject: 'Hi', turns: [long + ' Regards {Name}.'] }, 'en')).toBeNull();
+    expect(validateScript({ subject: 'Hi', turns: [long + ' {broken|group'] }, 'en')).toBeNull();
+  });
+
   it('derives personas from display names, addresses and domains', async () => {
     const { derivePersona, companyFromDomain } = await import('../warmup/content/persona.js');
     expect(derivePersona({ id: '1', email: 'jane.doe@acme-labs.com', displayName: null })).toMatchObject({ firstName: 'Jane', lastName: 'Doe', company: 'Acme Labs' });

@@ -14,7 +14,8 @@
   nav a { color:var(--fg); text-decoration:none; opacity:0.75; }
   nav a.active, nav a:hover { opacity:1; color:var(--accent); }
   nav form { margin-left:auto; }
-  main { max-width:1000px; margin:1.5rem auto; padding:0 1.5rem; }
+  main { max-width:1280px; margin:1.5rem auto; padding:0 1.5rem; }
+  body.wide main { max-width:1600px; }
   h1 { font-size:1.35rem; } h2 { font-size:1.05rem; margin-top:2rem; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:1rem 1.2rem; margin:1rem 0; }
   table { width:100%; border-collapse:collapse; font-size:0.88rem; }
@@ -60,7 +61,7 @@
   .auth-hint { text-align:center; color:var(--muted); font-size:0.8rem; margin:0.9rem 0 0; }
 </style>
 </head>
-<body>
+<body class="<%= typeof page !== 'undefined' && (page === 'warmup' || page === 'account') ? 'wide' : '' %>">
 <% if (typeof page !== 'undefined' && page !== 'login') { %>
 <nav>
   <span class="brand">📧 OutreachEmailMCP</span>

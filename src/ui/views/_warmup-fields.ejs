@@ -8,8 +8,9 @@
     sources   – optional map key → 'instance'|'org'|'account'|'cap'
 %>
 <%
-  const groups = [];
-  for (const f of fields) { if (!groups.includes(f.group)) groups.push(f.group); }
+  const primaryFields = fields.filter((f) => !f.advanced);
+  const advancedFields = fields.filter((f) => f.advanced);
+  const groupsOf = (list) => { const g = []; for (const f of list) { if (!g.includes(f.group)) g.push(f.group); } return g; };
   const prefill = mode !== 'bulk';
   const has = (k) => values && values[k] !== undefined && values[k] !== null;
   const eff = (k) => (has(k) ? values[k] : baseline ? baseline[k] : undefined);
@@ -31,12 +32,18 @@
   .wf-field .src.cap { color:var(--err); font-weight:600; }
   .wf-clear { text-align:center; }
   .wf-clear input { width:auto; }
+  .wf-primary .wf-field { grid-template-columns: 1fr 150px 22px; }
+  .wf-primary .wf-field label { font-size:0.9rem; }
+  details.wf-advanced { margin-top:1rem; border-top:1px solid var(--line); padding-top:0.6rem; }
+  details.wf-advanced summary { cursor:pointer; font-size:0.85rem; color:var(--muted); }
+  details.wf-advanced summary b { color:var(--fg); }
 </style>
-<div class="wf-groups">
+<% function renderFields(list, extraClass) { const groups = groupsOf(list); %>
+<div class="wf-groups <%= extraClass %>">
 <% for (const g of groups) { %>
   <div class="wf-group">
     <h4><%= g %></h4>
-    <% for (const f of fields.filter((x) => x.group === g)) { %>
+    <% for (const f of list.filter((x) => x.group === g)) { %>
     <% const isSet = prefill && has(f.key); const cls = isSet ? 'set' : ''; %>
     <div class="wf-field">
       <label for="<%= mode %>_<%= f.key %>">
@@ -79,6 +86,15 @@
   </div>
 <% } %>
 </div>
+<% } %>
+<%_ renderFields(primaryFields, 'wf-primary') _%>
+<% const advSet = advancedFields.filter((f) => has(f.key)).length; %>
+<details class="wf-advanced" <%= mode === 'bulk' ? '' : (advSet ? 'open' : '') %>>
+  <summary><b>Advanced</b> · <%= advancedFields.length %> more settings<%= advSet ? ` (${advSet} changed here)` : '' %> — engagement rates, delays, spam protection, pairing, throttling, cleanup. The defaults are tuned; change them only for a reason.</summary>
+  <div style="margin-top:0.6rem">
+  <%_ renderFields(advancedFields, '') _%>
+  </div>
+</details>
 <p class="muted" style="margin:0.6rem 0 0">
   <% if (!prefill) { %>Blank fields are left unchanged. Tick the box next to a field to clear that override on the selected mailboxes instead.<% }
      else { %>Every field shows the value in effect. Change what you want; a field left equal to the <%= layerName %> keeps inheriting it, and a blank means inherit. Fields marked <span class="src set">overridden</span> are set at this level.<% } %>

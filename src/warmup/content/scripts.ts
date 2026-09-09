@@ -23,7 +23,48 @@ import type { Rng } from '../rng.js';
 import type { WarmupScript } from '../../db/schema.js';
 import type { Persona } from './persona.js';
 
-const RETIRE_AFTER_USES = 12;
+/**
+ * Spintax: "{quick|short|brief} question" → one alternative per render, chosen
+ * by the seeded rng so a retry produces the same text. Scripts without
+ * spintax get a light rotation of common phrases instead.
+ */
+export function spin(text: string, rng: Rng): string {
+  const spun = text.replace(/\{([^{}]*\|[^{}]*)\}/g, (_m, inner: string) => {
+    const options = inner.split('|').map((o) => o.trim());
+    return rng.pick(options) ?? options[0] ?? '';
+  });
+  if (spun !== text) return spun;
+  return rotatePhrases(spun, rng);
+}
+
+const ROTATIONS: [RegExp, string[]][] = [
+  [/\bquick\b/gi, ['quick', 'short', 'brief']],
+  [/\bthanks\b/gi, ['thanks', 'thank you', 'many thanks']],
+  [/\blet me know\b/gi, ['let me know', 'tell me', 'give me a shout']],
+  [/\bno rush\b/gi, ['no rush', 'no hurry', 'whenever suits']],
+  [/\bsounds good\b/gi, ['sounds good', 'works for me', 'fine by me']],
+  [/\bnext week\b/gi, ['next week', 'early next week', 'in the coming week']],
+  [/\bthis week\b/gi, ['this week', 'later this week', 'in the next few days']],
+  [/\bhappy to\b/gi, ['happy to', 'glad to', 'more than happy to']],
+  [/\bI think\b/g, ['I think', 'I believe', 'I suspect']],
+  [/\bmakes sense\b/gi, ['makes sense', 'seems sensible', 'sounds right']],
+  [/\bgreat\b/gi, ['great', 'good', 'excellent']],
+  [/\bcatch up\b/gi, ['catch up', 'touch base', 'have a chat']],
+];
+
+function rotatePhrases(text: string, rng: Rng): string {
+  let out = text;
+  for (const [re, options] of ROTATIONS) {
+    out = out.replace(re, (m) => {
+      if (!rng.chance(55)) return m;
+      const pick = rng.pick(options) ?? m;
+      return m.charAt(0) === m.charAt(0).toUpperCase() && m.charAt(0) !== m.charAt(0).toLowerCase()
+        ? pick.charAt(0).toUpperCase() + pick.slice(1)
+        : pick;
+    });
+  }
+  return out;
+}
 
 /** Seed the bundled templates once so picking is one code path. */
 export function seedTemplateScripts(): number {
@@ -100,7 +141,7 @@ export async function replenishScripts(): Promise<void> {
   for (const language of languagesInUse()) {
     if (unusedScriptCount(language) >= config.WARMUP_SCRIPT_POOL_MIN) continue;
     try {
-      const scripts = await generateScripts(language, 'mixed', 20);
+      const scripts = await generateScripts(language, 'mixed', 12);
       const now = Date.now();
       for (const s of scripts) {
         db.insert(schema.warmupScripts)
@@ -135,8 +176,12 @@ export interface PickedScript {
   turns: string[];
 }
 
-/** Least-used live script for the language/register, LLM-sourced first.
- *  `exclude` lets a pair avoid a script it already used together. */
+/**
+ * Pick a script for a conversation. About WARMUP_SCRIPT_REUSE_PERCENT of the
+ * time an already-used script is reused (its rotating words re-roll at
+ * render time); otherwise the freshest unused one, LLM-sourced first.
+ * `exclude` lets a pair avoid a script it already used together.
+ */
 export function pickScript(
   language: string,
   register: 'mixed' | 'casual' | 'business',
@@ -144,25 +189,29 @@ export function pickScript(
   exclude: Set<string> = new Set(),
 ): PickedScript | null {
   const registerClause = register === 'mixed' ? '' : `AND register = '${register}'`;
-  const rows = sqlite
-    .prepare(
-      `SELECT * FROM warmup_scripts
-       WHERE language = ? AND retired = 0 ${registerClause}
-       ORDER BY CASE source WHEN 'llm' THEN 0 ELSE 1 END, used_count ASC, created_at ASC
-       LIMIT 40`,
-    )
-    .all(language) as Record<string, unknown>[];
-  const candidates = rows
-    .map(rowToScript)
-    .filter((s) => !exclude.has(s.id));
-  const pool = candidates.length > 0 ? candidates : rows.map(rowToScript);
+  const all = (
+    sqlite
+      .prepare(
+        `SELECT * FROM warmup_scripts WHERE language = ? AND retired = 0 ${registerClause}
+         ORDER BY CASE source WHEN 'llm' THEN 0 ELSE 1 END, used_count ASC, created_at ASC`,
+      )
+      .all(language) as Record<string, unknown>[]
+  ).map(rowToScript);
+  const candidates = all.filter((s) => !exclude.has(s.id));
+  const pool = candidates.length > 0 ? candidates : all;
   if (pool.length === 0) {
     if (language !== 'en') return pickScript('en', register, rng, exclude);
     return null;
   }
-  // Randomise among the least-used few so two mailboxes planning at the same
+  const used = pool.filter((s) => s.usedCount > 0);
+  const fresh = pool.filter((s) => s.usedCount === 0);
+  const reuse = used.length > 0 && (fresh.length === 0 || rng.chance(config.WARMUP_SCRIPT_REUSE_PERCENT));
+  // Reuse: weight toward the less-worn scripts so use spreads evenly. Fresh:
+  // randomise among the first few so two mailboxes planning at the same
   // moment do not both pick the very same script.
-  const script = rng.pick(pool.slice(0, Math.min(8, pool.length)))!;
+  const script = reuse
+    ? rng.weighted(used, (s) => 1 / (1 + s.usedCount))!
+    : rng.pick(fresh.slice(0, Math.min(8, fresh.length)))!;
   return { script, turns: JSON.parse(script.turnsJson) as string[] };
 }
 
@@ -173,7 +222,7 @@ export function markScriptUsed(scriptId: string): void {
          retired = CASE WHEN used_count + 1 >= ? AND source = 'llm' THEN 1 ELSE retired END
        WHERE id = ?`,
     )
-    .run(RETIRE_AFTER_USES, scriptId);
+    .run(config.WARMUP_SCRIPT_MAX_USES, scriptId);
 }
 
 export function scriptById(id: string): WarmupScript | undefined {
@@ -228,7 +277,7 @@ export function renderTurn(
     .replace(/\s+,/, ',')
     .trim();
   const signOff = from.signOff && rng.chance(60) ? `${from.signOff},` : rng.pick(signOffs)!;
-  let main = body.trim();
+  let main = spin(body.trim(), rng);
   if (opts.lowercaseOpener && rng.chance(12)) {
     main = main.charAt(0).toLowerCase() + main.slice(1);
   }
@@ -250,15 +299,20 @@ export function renderTurn(
 }
 
 export function ackPhrase(language: string, rng: Rng): string {
-  return rng.pick(localized(ACK_PHRASES, language))!;
+  return spin(rng.pick(localized(ACK_PHRASES, language))!, rng);
 }
 
 export function forwardNote(language: string, rng: Rng): string {
-  return rng.pick(localized(FORWARD_NOTES, language))!;
+  return spin(rng.pick(localized(FORWARD_NOTES, language))!, rng);
 }
 
 export function forwardReply(language: string, rng: Rng): string {
-  return rng.pick(localized(FORWARD_REPLIES, language))!;
+  return spin(rng.pick(localized(FORWARD_REPLIES, language))!, rng);
+}
+
+/** The subject a thread is opened with: spun once, then fixed for the thread. */
+export function spinSubject(subject: string, rng: Rng): string {
+  return spin(subject, rng);
 }
 
 /** Share of recent warmup messages written from LLM scripts, for the UI. */

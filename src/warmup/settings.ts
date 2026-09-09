@@ -285,6 +285,8 @@ export interface FieldSpec {
   type: FieldType;
   group: string;
   help: string;
+  /** Shown only under "Advanced": worth having, rarely worth changing. */
+  advanced?: boolean;
   min?: number;
   max?: number;
   step?: number;
@@ -342,6 +344,14 @@ export const WARMUP_FIELDS: FieldSpec[] = [
   { key: 'pauseAtSpamRate', label: 'Pause at spam rate', type: 'percent', group: 'Protection', min: 0, max: 100, help: 'Rate that auto-pauses the mailbox.' },
   { key: 'cooldownDays', label: 'Cooldown (days)', type: 'int', group: 'Protection', min: 1, max: 14, help: 'How long an auto-pause lasts.' },
 ];
+
+// The handful of settings people actually tune: how much, when, in what
+// language, how chatty. Everything else is a good default under Advanced.
+const PRIMARY: Set<keyof WarmupSettings> = new Set([
+  'startVolume', 'increasePerDay', 'dailyLimit', 'weekdaysOnly', 'timezone',
+  'sendWindowStart', 'sendWindowEnd', 'replyRate', 'languages',
+]);
+for (const f of WARMUP_FIELDS) if (!PRIMARY.has(f.key)) f.advanced = true;
 
 /** Coerce a flat form submission (strings) into a validated patch. Empty
  *  string = leave unchanged (undefined); the literal "__inherit" = clear the

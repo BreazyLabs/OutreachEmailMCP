@@ -28,7 +28,7 @@ import {
 import { loadPool, memberById, choosePartner, sharedLanguages, createdOnDate, type PoolMember } from './pool.js';
 import { registerMessage, attachSendJob, landingById, updateLanding, messageById } from './ledger.js';
 import { personaFor } from './state.js';
-import { pickScript, markScriptUsed, scriptById, renderTurn, ackPhrase, forwardNote, forwardReply } from './content/scripts.js';
+import { pickScript, markScriptUsed, scriptById, renderTurn, ackPhrase, forwardNote, forwardReply, spinSubject } from './content/scripts.js';
 import {
   buildWarmupMime,
   buildMdnMime,
@@ -142,6 +142,7 @@ async function handleSendOpen(task: WarmupTask, payload: { partnerAccountId: str
   const picked = pickScript(language, me.settings.register, rng);
   if (!picked) throw new SkipTask('No conversation scripts available');
   const { script, turns } = picked;
+  const subject = spinSubject(script.subject, rng);
   const turnsPlanned = Math.max(1, Math.min(drawThreadLength(me.settings.maxThreadTurns, rng), me.settings.maxThreadTurns));
 
   const threadId = nanoid();
@@ -153,7 +154,7 @@ async function handleSendOpen(task: WarmupTask, payload: { partnerAccountId: str
       kind: 'conversation',
       initiatorAccountId: me.account.id,
       participantsJson: JSON.stringify(participantIds),
-      subject: script.subject,
+      subject,
       scriptId: script.id,
       language,
       turnsPlanned,
@@ -182,7 +183,7 @@ async function handleSendOpen(task: WarmupTask, payload: { partnerAccountId: str
     toAccountId: partner.account.id,
     ccAccountIds: ccOk ? [cc!.account.id] : [],
     rfcMessageId: id.normalized,
-    subject: script.subject,
+    subject,
     contentSource: script.source,
     requestedReceipt: payload.requestReceipt,
     localDate: todayFor(me),
@@ -192,14 +193,14 @@ async function handleSendOpen(task: WarmupTask, payload: { partnerAccountId: str
     from,
     to: [to],
     cc: ccOk ? [partyFor(cc!)] : [],
-    subject: script.subject,
+    subject,
     text: body.text,
     html: body.html,
     messageIdHeader: id.header,
     normalizedMessageId: id.normalized,
     requestReceipt: payload.requestReceipt,
   });
-  await queueWarmupSend(me, raw, [partner.account.email, ...(ccOk ? [cc!.account.email] : [])], script.subject, message.id);
+  await queueWarmupSend(me, raw, [partner.account.email, ...(ccOk ? [cc!.account.email] : [])], subject, message.id);
   db.update(schema.warmupThreads).set({ turnsDone: 1, updatedAt: Date.now() }).where(eq(schema.warmupThreads.id, threadId)).run();
   markScriptUsed(script.id);
   logActivity({
@@ -207,7 +208,7 @@ async function handleSendOpen(task: WarmupTask, payload: { partnerAccountId: str
     action: 'send-open',
     status: 'ok',
     accountId: me.account.id,
-    detail: `"${script.subject}" → ${partner.account.email}${ccOk ? ` cc ${cc!.account.email}` : ''}${payload.internal ? ' (internal)' : ''}${payload.requestReceipt ? ' (receipt requested)' : ''}`,
+    detail: `"${subject}" → ${partner.account.email}${ccOk ? ` cc ${cc!.account.email}` : ''}${payload.internal ? ' (internal)' : ''}${payload.requestReceipt ? ' (receipt requested)' : ''}`,
   });
 }
 

@@ -110,6 +110,12 @@ const envSchema = z.object({
   WARMUP_LLM_DAILY_CALL_BUDGET: z.coerce.number().int().min(0).default(200),
   // Unused scripts to keep on hand per language; topped up in batches of 20.
   WARMUP_SCRIPT_POOL_MIN: z.coerce.number().int().min(0).default(60),
+  // Share of conversations that reuse an already-used script (with its
+  // rotating words re-rolled) rather than a fresh one. Real mailboxes repeat
+  // themselves; a pool where every message is unique looks generated.
+  WARMUP_SCRIPT_REUSE_PERCENT: z.coerce.number().int().min(0).max(100).default(66),
+  // A script is retired after this many uses instance-wide.
+  WARMUP_SCRIPT_MAX_USES: z.coerce.number().int().min(1).default(40),
   // How often each opted-in mailbox's Spam folder is listed.
   WARMUP_SPAM_SWEEP_SECONDS: z.coerce.number().int().min(60).default(600),
   // Sent but not seen in INBOX, Spam or a category by then = missing.
