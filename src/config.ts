@@ -180,6 +180,12 @@ function loadDotEnv() {
 
 loadDotEnv();
 
+// A compose file that forwards `${VAR:-}` hands the app an empty string for
+// anything unset; that must read as "not configured", not as a bad value.
+for (const key of Object.keys(process.env)) {
+  if (process.env[key] === '') delete process.env[key];
+}
+
 const parsed = envSchema.safeParse(process.env);
 if (!parsed.success) {
   const issues = parsed.error.issues

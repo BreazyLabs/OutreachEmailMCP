@@ -27,6 +27,12 @@ services:
       # container start — see docker-entrypoint.sh. This token is the only
       # secret the deployment provides; rotate it in the BreazyEnv UI.
       BREAZYENV_TOKEN: ${BREAZYENV_TOKEN:?Set BREAZYENV_TOKEN (BreazyEnv project token)}
+      # Warmup content model (any OpenAI-compatible endpoint). Set in the
+      # Dokploy environment panel; empty here means "not configured" and the
+      # engine uses its bundled templates.
+      WARMUP_LLM_BASE_URL: ${WARMUP_LLM_BASE_URL:-}
+      WARMUP_LLM_API_KEY: ${WARMUP_LLM_API_KEY:-}
+      WARMUP_LLM_MODEL: ${WARMUP_LLM_MODEL:-gpt-4o-mini}
     volumes:
       # Everything lives here: SQLite DB (accounts, encrypted tokens, queue),
       # message spool, TLS certs. Back this volume up.
