@@ -75,12 +75,22 @@ export interface PlanLimits {
   dailySends: number;
 }
 
+// A quota of 0 means unlimited (Infinity), which every consumer already
+// handles through Number.isFinite checks.
+const orUnlimited = (n: number) => (n > 0 ? n : Infinity);
+
 export function planLimits(org: Org): PlanLimits {
   if (!config.SAAS_MODE) return { maxAccounts: Infinity, dailySends: Infinity };
   if (org.plan === 'pro') {
-    return { maxAccounts: config.PLAN_PRO_MAX_ACCOUNTS, dailySends: config.PLAN_PRO_DAILY_SENDS };
+    return {
+      maxAccounts: orUnlimited(config.PLAN_PRO_MAX_ACCOUNTS),
+      dailySends: orUnlimited(config.PLAN_PRO_DAILY_SENDS),
+    };
   }
-  return { maxAccounts: config.PLAN_FREE_MAX_ACCOUNTS, dailySends: config.PLAN_FREE_DAILY_SENDS };
+  return {
+    maxAccounts: orUnlimited(config.PLAN_FREE_MAX_ACCOUNTS),
+    dailySends: orUnlimited(config.PLAN_FREE_DAILY_SENDS),
+  };
 }
 
 export function countAccounts(orgId: string): number {

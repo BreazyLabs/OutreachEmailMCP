@@ -5,8 +5,8 @@
     <span class="badge <%= org.plan === 'pro' ? 'active' : 'queued' %>"><%= org.plan %></span> plan.</p>
   <table>
     <tr><th>Usage</th><th>Current</th><th>Limit</th></tr>
-    <tr><td>Connected accounts</td><td><%= usage.accounts %></td><td><%= usage.maxAccounts %></td></tr>
-    <tr><td>Sends (last 24h)</td><td><%= usage.sends24h %></td><td><%= usage.dailySends %></td></tr>
+    <tr><td>Connected accounts</td><td><%= usage.accounts %></td><td><%= Number.isFinite(usage.maxAccounts) ? usage.maxAccounts : 'unlimited' %></td></tr>
+    <tr><td>Sends (last 24h)</td><td><%= usage.sends24h %></td><td><%= Number.isFinite(usage.dailySends) ? usage.dailySends : 'unlimited' %></td></tr>
   </table>
 </div>
 <% if (stripeEnabled) { %>

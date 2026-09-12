@@ -156,10 +156,12 @@ const envSchema = z.object({
       message:
         'STRIPE_PRICE_PRO must be a Stripe Price ID (price_…) — create a recurring price in Product catalog and copy its API ID, not the numeric amount',
     }),
-  PLAN_FREE_MAX_ACCOUNTS: z.coerce.number().int().default(2),
-  PLAN_FREE_DAILY_SENDS: z.coerce.number().int().default(100),
-  PLAN_PRO_MAX_ACCOUNTS: z.coerce.number().int().default(50),
-  PLAN_PRO_DAILY_SENDS: z.coerce.number().int().default(5000),
+  // Plan quotas; 0 = unlimited. The pro plan is unlimited by default —
+  // a workspace that pays should never hit a mailbox ceiling.
+  PLAN_FREE_MAX_ACCOUNTS: z.coerce.number().int().min(0).default(2),
+  PLAN_FREE_DAILY_SENDS: z.coerce.number().int().min(0).default(100),
+  PLAN_PRO_MAX_ACCOUNTS: z.coerce.number().int().min(0).default(0),
+  PLAN_PRO_DAILY_SENDS: z.coerce.number().int().min(0).default(0),
 });
 
 function loadDotEnv() {
