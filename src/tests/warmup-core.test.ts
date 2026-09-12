@@ -366,6 +366,7 @@ describe('domain DNS health', () => {
     const resolver = {
       txt: async (n: string) => records[n] ?? [],
       mx: async (n: string) => (n === 'good.test' ? [{ exchange: 'aspmx.l.google.com', priority: 1 }] : []),
+      cname: async () => [] as string[],
     };
     const good = await checkDomain('good.test', resolver);
     expect(good).toMatchObject({ spfOk: true, dkimOk: true, dmarcOk: true, mxOk: true, dmarcPolicy: 'quarantine', dkimSelectors: ['google'] });
@@ -376,11 +377,26 @@ describe('domain DNS health', () => {
     const weak = await checkDomain('weak.test', {
       txt: async (n) => (n === 'weak.test' ? ['v=spf1 +all'] : n === '_dmarc.weak.test' ? ['v=DMARC1; p=none'] : n === 'selector1._domainkey.weak.test' ? ['v=DKIM1; p=abc'] : []),
       mx: async () => [{ exchange: 'weak-test.mail.protection.outlook.com', priority: 0 }],
+      cname: async () => [],
     });
+    expect(weak.providers).toEqual(['microsoft']);
+    expect(weak.dkimOk).toBe(true);
     expect(weak.dmarcOk).toBe(true);
     expect(weak.issues.some((i) => i.includes('+all'))).toBe(true);
     expect(weak.issues.some((i) => i.includes('p=none'))).toBe(true);
     expect(weak.issues.some((i) => i.includes('spf.protection.outlook.com'))).toBe(true);
+    // Microsoft domain with CNAMEs present but no key behind them: the exact
+    // "enable DKIM in Defender" situation, named as such.
+    const halfway = await checkDomain('half.test', {
+      txt: async (n) => (n === 'half.test' ? ['v=spf1 include:spf.protection.outlook.com -all'] : n === '_dmarc.half.test' ? ['v=DMARC1; p=quarantine'] : []),
+      mx: async () => [{ exchange: 'half-test.mail.protection.outlook.com', priority: 0 }],
+      cname: async (n) => (n.startsWith('selector') ? ['selector1-half-test._domainkey.x.dkim.mail.microsoft'] : []),
+    }, ['microsoft']);
+    expect(halfway.dkimOk).toBe(false);
+    expect(halfway.issues).toEqual([expect.stringContaining('Enable DKIM signing for this domain in Microsoft 365 Defender')]);
+    const googleMissing = await checkDomain('g.test', { txt: async () => [], mx: async () => [{ exchange: 'aspmx.l.google.com', priority: 1 }], cname: async () => [] }, ['google']);
+    expect(googleMissing.issues.some((i) => i.includes('Google Admin'))).toBe(true);
+    expect(googleMissing.issues.some((i) => i.includes('selector1'))).toBe(false);
   });
 });
 

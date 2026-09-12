@@ -14,7 +14,10 @@ import type { DomainHealth } from '../db/schema.js';
 export interface Resolver {
   txt(name: string): Promise<string[]>;
   mx(name: string): Promise<{ exchange: string; priority: number }[]>;
+  cname(name: string): Promise<string[]>;
 }
+
+export type MailProvider = 'google' | 'microsoft';
 
 const NXDOMAIN = new Set(['ENOTFOUND', 'ENODATA', 'ESERVFAIL']);
 
@@ -36,11 +39,25 @@ export const systemResolver: Resolver = {
       throw err;
     }
   },
+  async cname(name) {
+    try {
+      return await dns.resolveCname(name);
+    } catch (err) {
+      if (NXDOMAIN.has((err as { code?: string }).code ?? '')) return [];
+      throw err;
+    }
+  },
 };
 
-// Google Workspace signs with "google"; Microsoft 365 with selector1/2; the
-// rest are common defaults for other senders.
-const DKIM_SELECTORS = ['google', 'selector1', 'selector2', 'default', 'dkim', 'k1', 'mail', 's1', 's2'];
+// Which selectors each provider signs with. Google Workspace publishes a TXT
+// at "google"; Microsoft 365 needs two CNAMEs (selector1/2) pointing at
+// Microsoft, behind which the key appears only once DKIM signing is enabled
+// for the domain in the Defender portal. Other senders use assorted names.
+const SELECTORS: Record<MailProvider | 'other', string[]> = {
+  google: ['google'],
+  microsoft: ['selector1', 'selector2'],
+  other: ['default', 'dkim', 'k1', 'mail', 's1', 's2'],
+};
 
 export interface DomainCheck {
   domain: string;
@@ -55,9 +72,23 @@ export interface DomainCheck {
   mxOk: boolean;
   issues: string[];
   error: string | null;
+  /** Providers the check assumed (from connected mailboxes, else from MX). */
+  providers: MailProvider[];
 }
 
-export async function checkDomain(domain: string, resolver: Resolver = systemResolver): Promise<DomainCheck> {
+function providersFromMx(mx: { exchange: string }[]): MailProvider[] {
+  const hosts = mx.map((m) => m.exchange.toLowerCase());
+  const out: MailProvider[] = [];
+  if (hosts.some((h) => h.endsWith('google.com') || h.endsWith('googlemail.com'))) out.push('google');
+  if (hosts.some((h) => h.endsWith('outlook.com') || h.includes('protection.outlook'))) out.push('microsoft');
+  return out;
+}
+
+export async function checkDomain(
+  domain: string,
+  resolver: Resolver = systemResolver,
+  knownProviders: MailProvider[] = [],
+): Promise<DomainCheck> {
   const out: DomainCheck = {
     domain,
     spf: null, spfOk: false,
@@ -66,14 +97,25 @@ export async function checkDomain(domain: string, resolver: Resolver = systemRes
     mx: [], mxOk: false,
     issues: [],
     error: null,
+    providers: [...knownProviders],
   };
   try {
-    const [txt, mx, dmarcTxt, ...dkim] = await Promise.all([
+    const [txt, mx, dmarcTxt] = await Promise.all([
       resolver.txt(domain),
       resolver.mx(domain),
       resolver.txt(`_dmarc.${domain}`),
-      ...DKIM_SELECTORS.map((s) => resolver.txt(`${s}._domainkey.${domain}`).catch(() => [] as string[])),
     ]);
+    if (out.providers.length === 0) out.providers = providersFromMx(mx);
+    const selectors = [
+      ...new Set([...out.providers.flatMap((p) => SELECTORS[p]), ...(out.providers.length ? [] : SELECTORS.other)]),
+    ];
+    const dkim = await Promise.all(
+      selectors.map(async (s) => ({
+        selector: s,
+        txt: await resolver.txt(`${s}._domainkey.${domain}`).catch(() => [] as string[]),
+        cname: await resolver.cname(`${s}._domainkey.${domain}`).catch(() => [] as string[]),
+      })),
+    );
 
     // SPF
     const spfRecords = txt.filter((t) => /^v=spf1\b/i.test(t.trim()));
@@ -106,13 +148,31 @@ export async function checkDomain(domain: string, resolver: Resolver = systemRes
       }
     }
 
-    // DKIM
-    DKIM_SELECTORS.forEach((selector, i) => {
-      const records = dkim[i] ?? [];
-      if (records.some((r) => /v=DKIM1|\bp=[A-Za-z0-9+/]/.test(r))) out.dkimSelectors.push(selector);
-    });
+    // DKIM — the message names the provider's own fix, not a list of selectors.
+    for (const d of dkim) {
+      if (d.txt.some((r) => /v=DKIM1|\bp=[A-Za-z0-9+/]/.test(r))) out.dkimSelectors.push(d.selector);
+    }
     out.dkimOk = out.dkimSelectors.length > 0;
-    if (!out.dkimOk) out.issues.push('No DKIM key found on the usual selectors (google, selector1, selector2, …)');
+    if (!out.dkimOk) {
+      const ms = out.providers.includes('microsoft');
+      const gg = out.providers.includes('google');
+      const msCnames = dkim.filter((d) => d.selector.startsWith('selector') && d.cname.length > 0).length;
+      if (ms && msCnames > 0) {
+        out.issues.push(
+          'DKIM not enabled: the selector1/selector2 CNAMEs are in place but Microsoft is not publishing a key yet. Enable DKIM signing for this domain in Microsoft 365 Defender (Email & collaboration → Policies & rules → Threat policies → Email authentication settings → DKIM).',
+        );
+      } else if (ms) {
+        out.issues.push(
+          'DKIM not set up: add the two selector1/selector2 CNAME records shown in Microsoft 365 Defender (Email authentication settings → DKIM), then enable signing for the domain.',
+        );
+      } else if (gg) {
+        out.issues.push(
+          'DKIM not set up: no key at google._domainkey. In Google Admin go to Apps → Google Workspace → Gmail → Authenticate email, generate the record, publish the TXT, then click "Start authentication".',
+        );
+      } else {
+        out.issues.push('No DKIM key found on the usual selectors');
+      }
+    }
 
     // MX
     out.mx = mx.sort((a, b) => a.priority - b.priority).map((m) => m.exchange.toLowerCase());
@@ -168,10 +228,23 @@ function saveCheck(c: DomainCheck): void {
 
 /** Every domain with a connected mailbox on the instance. */
 export function connectedDomains(orgId?: string): string[] {
+  return [...connectedDomainProviders(orgId).keys()].sort();
+}
+
+/** Domain → providers of the mailboxes connected on it. */
+export function connectedDomainProviders(orgId?: string): Map<string, MailProvider[]> {
   const rows = orgId
-    ? db.select({ email: schema.accounts.email }).from(schema.accounts).where(eq(schema.accounts.orgId, orgId)).all()
-    : db.select({ email: schema.accounts.email }).from(schema.accounts).all();
-  return [...new Set(rows.map((r) => domainOfEmail(r.email)).filter(Boolean))].sort();
+    ? db.select({ email: schema.accounts.email, provider: schema.accounts.provider }).from(schema.accounts).where(eq(schema.accounts.orgId, orgId)).all()
+    : db.select({ email: schema.accounts.email, provider: schema.accounts.provider }).from(schema.accounts).all();
+  const out = new Map<string, MailProvider[]>();
+  for (const r of rows) {
+    const d = domainOfEmail(r.email);
+    if (!d) continue;
+    const list = out.get(d) ?? [];
+    if (!list.includes(r.provider)) list.push(r.provider);
+    out.set(d, list);
+  }
+  return out;
 }
 
 /**
@@ -181,7 +254,8 @@ export function connectedDomains(orgId?: string): string[] {
  */
 export async function refreshDomainHealth(opts: { orgId?: string; maxAgeMs?: number; force?: boolean } = {}): Promise<number> {
   const maxAge = opts.maxAgeMs ?? 24 * 3600_000;
-  const domains = connectedDomains(opts.orgId);
+  const providersByDomain = connectedDomainProviders(opts.orgId);
+  const domains = [...providersByDomain.keys()].sort();
   const existing = new Map(
     domains.length
       ? db.select().from(schema.domainHealth).where(inArray(schema.domainHealth.domain, domains)).all().map((r) => [r.domain, r])
@@ -191,7 +265,7 @@ export async function refreshDomainHealth(opts: { orgId?: string; maxAgeMs?: num
   for (const domain of domains) {
     const prev = existing.get(domain);
     if (!opts.force && prev && Date.now() - prev.checkedAt < maxAge) continue;
-    const result = await checkDomain(domain);
+    const result = await checkDomain(domain, systemResolver, providersByDomain.get(domain) ?? []);
     saveCheck(result);
     checked++;
     const had = prev ? (JSON.parse(prev.issuesJson ?? '[]') as string[]).length : -1;
