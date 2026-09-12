@@ -15,6 +15,7 @@ import { localDate, localToInstant, shiftDate } from './clock.js';
 import { personaFor, getWarmupAccount } from './state.js';
 import { contentSourceMix } from './content/scripts.js';
 import { llmStatus } from './content/llm.js';
+import { domainHealthFor, domainOfEmail, dnsVerdict, issuesOf } from './dns-health.js';
 import type { Persona } from './content/persona.js';
 import type { Account, Org, WarmupAccount } from '../db/schema.js';
 
@@ -46,6 +47,8 @@ export interface AccountWarmupSummary {
   pendingTasks: number;
   lastEvent: { action: string; status: string; detail: string | null; at: number } | null;
   timezone: string;
+  /** Sending-domain DNS posture from the last daily check. */
+  dns: { verdict: 'ok' | 'warn' | 'bad' | 'unchecked'; issues: string[]; checkedAt: number | null; spf: boolean; dkim: boolean; dmarc: boolean; dmarcPolicy: string | null };
 }
 
 function countWhere(sqlText: string, ...params: unknown[]): number {
@@ -73,11 +76,21 @@ export function summarizeAccount(account: Account, org: Org, warm: WarmupAccount
     .orderBy(desc(schema.activityLog.createdAt))
     .limit(1)
     .get();
+  const dnsRow = domainHealthFor([domainOfEmail(account.email)]).get(domainOfEmail(account.email));
   return {
     accountId: account.id,
     email: account.email,
     provider: account.provider,
     accountStatus: account.status,
+    dns: {
+      verdict: dnsVerdict(dnsRow),
+      issues: issuesOf(dnsRow),
+      checkedAt: dnsRow?.checkedAt ?? null,
+      spf: !!dnsRow?.spfOk,
+      dkim: !!dnsRow?.dkimOk,
+      dmarc: !!dnsRow?.dmarcOk,
+      dmarcPolicy: dnsRow?.dmarcPolicy ?? null,
+    },
     enabled: !!warm?.enabled,
     state: warm?.state ?? 'off',
     rampDay: warm?.rampDay ?? 0,
@@ -199,6 +212,7 @@ export interface OrgWarmupOverview {
   org: {
     poolScope: Org['warmupPoolScope'];
     filterTag: string | null;
+    tagEnabled: boolean;
     emitWebhooks: boolean;
     showInSendLog: boolean;
     defaults: ResolvedWarmupSettings;
@@ -248,6 +262,7 @@ export function orgWarmupOverview(org: Org): OrgWarmupOverview {
     org: {
       poolScope: org.warmupPoolScope,
       filterTag: org.warmupFilterTag,
+      tagEnabled: !!org.warmupTagEnabled,
       emitWebhooks: !!org.warmupEmitWebhooks,
       showInSendLog: !!org.warmupShowInSendLog,
       defaults,

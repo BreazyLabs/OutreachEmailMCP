@@ -7,7 +7,7 @@
 
 import { nanoid } from 'nanoid';
 import { eq } from 'drizzle-orm';
-import { db, sqlite, schema } from '../db/index.js';
+import { db, schema } from '../db/index.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { logActivity } from '../observability/activity.js';
@@ -15,8 +15,8 @@ import { providerFor } from '../providers/index.js';
 import { AuthError, isMessageGone } from '../providers/errors.js';
 import { enqueueSend } from '../queue/sendQueue.js';
 import { rngFrom } from './rng.js';
-import { localDate, localToInstant, shiftDate } from './clock.js';
-import { ensureOrgTag, newWarmupMessageId } from './identity.js';
+import { localDate } from './clock.js';
+import { orgTagIfEnabled, newWarmupMessageId } from './identity.js';
 import {
   claimTasks,
   completeTask,
@@ -76,19 +76,12 @@ function todayFor(m: PoolMember): string {
   return localDate(Date.now(), m.settings.timezone);
 }
 
-function realSendsToday(m: PoolMember): number {
-  const tz = m.settings.timezone;
-  const today = localDate(Date.now(), tz);
-  const dayStart = localToInstant(today, 0, tz);
-  const dayEnd = localToInstant(shiftDate(today, 1), 0, tz);
-  return (
-    sqlite
-      .prepare(
-        `SELECT COUNT(*) AS n FROM send_jobs WHERE account_id = ? AND source != 'warmup'
-           AND created_at >= ? AND created_at < ?`,
-      )
-      .get(m.account.id, dayStart, dayEnd) as { n: number }
-  ).n;
+/** Languages are listed most-used first: the first one wins about two
+ *  thirds of the time so a Dutch pair mostly writes Dutch. */
+function chooseLanguage(shared: string[], preferred: string | undefined, rng: ReturnType<typeof rngFrom>): string {
+  if (shared.length === 0) return 'en';
+  if (preferred && shared.includes(preferred) && rng.chance(66)) return preferred;
+  return rng.pick(shared) ?? shared[0]!;
 }
 
 /** The daily caps are enforced here, against what was actually created
@@ -98,9 +91,6 @@ function assertSendCapacity(m: PoolMember, kind: 'open' | 'reply' | 'forward'): 
   const created = createdOnDate(m.account.id, today);
   const cap = kind === 'open' ? Math.max(0, m.warm.todayTarget) : m.settings.dailyLimit;
   if (created >= cap) throw new SkipTask(`Daily warmup cap reached (${created}/${cap})`);
-  if (m.settings.maxTotalPerDay !== null && created + realSendsToday(m) >= m.settings.maxTotalPerDay) {
-    throw new SkipTask(`Combined daily send cap reached (${m.settings.maxTotalPerDay})`);
-  }
 }
 
 async function queueWarmupSend(
@@ -137,8 +127,7 @@ async function handleSendOpen(task: WarmupTask, payload: { partnerAccountId: str
   const cc = payload.ccAccountId ? memberById(pool, payload.ccAccountId) : null;
   const ccOk = cc && cc.account.status === 'active' && cc.warm.state !== 'off' && cc.warm.state !== 'blocked_upstream';
   const rng = rngFrom('open', task.idempotencyKey);
-  const languages = sharedLanguages(me, partner);
-  const language = rng.pick(languages) ?? 'en';
+  const language = chooseLanguage(sharedLanguages(me, partner), me.settings.languages[0], rng);
   const picked = pickScript(language, me.settings.register, rng);
   if (!picked) throw new SkipTask('No conversation scripts available');
   const { script, turns } = picked;
@@ -168,13 +157,13 @@ async function handleSendOpen(task: WarmupTask, payload: { partnerAccountId: str
 
   const from = partyFor(me);
   const to = partyFor(partner);
-  const tag = ensureOrgTag(me.org.id);
+  const tag = orgTagIfEnabled(me.org.id);
   const body = renderTurn(turns[0] ?? ackPhrase(language, rng), language, from.persona, to.persona, rng, {
-    includeHtml: rng.chance(60),
+    includeHtml: true,
     tag,
     lowercaseOpener: true,
   });
-  const id = newWarmupMessageId(me.account.email);
+  const id = newWarmupMessageId(me.account.email, me.account.provider);
   const message = registerMessage({
     threadId,
     turn: 0,
@@ -274,15 +263,15 @@ async function handleSendReply(task: WarmupTask, payload: { landingId: string; m
 
   const from = partyFor(me);
   const to = partyFor(toMember);
-  const tag = ensureOrgTag(me.org.id);
-  const rendered = renderTurn(text, language, from.persona, to.persona, rng, { includeHtml: rng.chance(60), tag });
+  const tag = orgTagIfEnabled(me.org.id);
+  const rendered = renderTurn(text, language, from.persona, to.persona, rng, { includeHtml: true, tag });
   const quoted = originalFor(original.id, pool);
   const quote = quoted ? quoteBlock(from.style, quoted.original) : null;
   const bodyText = quote ? `${rendered.text}\n${quote.text}` : rendered.text;
   const bodyHtml = rendered.html ? (quote ? `${rendered.html}<br>${quote.html}` : rendered.html) : null;
 
   const subject = replySubject(thread.subject);
-  const id = newWarmupMessageId(me.account.email);
+  const id = newWarmupMessageId(me.account.email, me.account.provider);
   const references = threadReferences(thread.id);
   const inReplyTo = `<${original.rfcMessageId}>`;
   if (!references.includes(inReplyTo)) references.push(inReplyTo);
@@ -342,14 +331,14 @@ async function handleSendForward(task: WarmupTask, payload: { landingId: string;
   const exclude = new Set(participants(sourceThread));
   const recipient = choosePartner(me, pool, rng, { internal: rng.chance(50), exclude });
   if (!recipient) throw new SkipTask('No third mailbox available to forward to');
-  const language = rng.pick(sharedLanguages(me, recipient)) ?? sourceThread.language;
+  const language = chooseLanguage(sharedLanguages(me, recipient), me.settings.languages[0], rng);
   const quoted = originalFor(original.id, pool);
   if (!quoted) throw new SkipTask('Original message vanished');
 
   const from = partyFor(me);
   const to = partyFor(recipient);
-  const tag = ensureOrgTag(me.org.id);
-  const rendered = renderTurn(forwardNote(language, rng), language, from.persona, to.persona, rng, { includeHtml: rng.chance(60), tag });
+  const tag = orgTagIfEnabled(me.org.id);
+  const rendered = renderTurn(forwardNote(language, rng), language, from.persona, to.persona, rng, { includeHtml: true, tag });
   const block = forwardBlock(from.style, quoted.original);
   const subject = forwardSubject(sourceThread.subject, from.style);
   const threadId = nanoid();
@@ -372,7 +361,7 @@ async function handleSendForward(task: WarmupTask, payload: { landingId: string;
       updatedAt: now,
     })
     .run();
-  const id = newWarmupMessageId(me.account.email);
+  const id = newWarmupMessageId(me.account.email, me.account.provider);
   const message = registerMessage({
     threadId,
     turn: 0,
@@ -417,7 +406,7 @@ async function handleSendMdn(task: WarmupTask, payload: { landingId: string; mes
   if (!original || !original.requestedReceipt) throw new SkipTask('No receipt was requested');
   const sender = memberById(pool, original.fromAccountId);
   if (!sender || sender.account.status !== 'active') throw new SkipTask('Original sender is unavailable');
-  const id = newWarmupMessageId(me.account.email);
+  const id = newWarmupMessageId(me.account.email, me.account.provider);
   const message = registerMessage({
     threadId: original.threadId,
     turn: 99,

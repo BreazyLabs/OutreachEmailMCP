@@ -9,19 +9,12 @@
  */
 
 import { eq } from 'drizzle-orm';
-import { db, sqlite, schema } from '../db/index.js';
+import { db, schema } from '../db/index.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { logActivity } from '../observability/activity.js';
 import { rngFrom, type Rng } from './rng.js';
-import {
-  localDate,
-  localMinutes,
-  localToInstant,
-  parseHHMM,
-  shiftDate,
-  weekdayOf,
-} from './clock.js';
+import { localDate, localMinutes, localToInstant, parseHHMM, shiftDate, weekdayOf } from './clock.js';
 import { enqueueTask } from './tasks.js';
 import {
   loadPool,
@@ -49,7 +42,7 @@ export function computeDayTarget(
   throttlePercent: number,
   date: string,
   rng: Rng,
-  extra: { realSendsToday?: number; poolOk: boolean },
+  extra: { poolOk: boolean },
 ): DayTarget {
   const weekday = weekdayOf(date);
   const weekend = weekday === 0 || weekday === 6;
@@ -70,9 +63,6 @@ export function computeDayTarget(
   }
   target *= throttlePercent / 100;
   target = Math.round(target);
-  if (settings.maxTotalPerDay !== null && extra.realSendsToday !== undefined) {
-    target = Math.min(target, Math.max(0, settings.maxTotalPerDay - extra.realSendsToday));
-  }
   target = Math.max(0, Math.min(target, settings.dailyLimit));
   if (target === 0) {
     return { target: 0, openers: 0, sendingDay: false, rampValue, reason: weekend ? 'weekend' : 'throttled to zero' };
@@ -133,17 +123,6 @@ export function sampleSendTimes(
     });
 }
 
-function realSendsOnDate(accountId: string, dayStart: number, dayEnd: number): number {
-  return (
-    sqlite
-      .prepare(
-        `SELECT COUNT(*) AS n FROM send_jobs WHERE account_id = ? AND source != 'warmup'
-           AND created_at >= ? AND created_at < ?`,
-      )
-      .get(accountId, dayStart, dayEnd) as { n: number }
-  ).n;
-}
-
 export interface PlanOutcome {
   accountId: string;
   date: string;
@@ -185,11 +164,7 @@ export function planMember(member: PoolMember, pool: PoolMember[], now = Date.no
   }
 
   const rng = rngFrom('plan', config.masterKey.toString('base64'), member.account.id, today);
-  const dayStart = localToInstant(today, 0, tz);
-  const dayEnd = localToInstant(shiftDate(today, 1), 0, tz);
   const day = computeDayTarget(settings, rampDay, warm.throttlePercent, today, rng, {
-    realSendsToday:
-      settings.maxTotalPerDay !== null ? realSendsOnDate(member.account.id, dayStart, dayEnd) : undefined,
     poolOk: !poolTooSmall(pool),
   });
 

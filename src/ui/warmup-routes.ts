@@ -25,6 +25,7 @@ import { enableWarmup, disableWarmup, pauseWarmup, resumeWarmup, setPersona } fr
 import { llmStatus } from '../warmup/content/llm.js';
 import { healthOf, orgHealth, HEALTH_LABELS } from '../warmup/health.js';
 import { placementChartSvg, sparklineSvg, CHART_LEGEND } from './charts.js';
+import { refreshDomainHealth } from '../warmup/dns-health.js';
 import { logActivity } from '../observability/activity.js';
 
 type Body = Record<string, unknown>;
@@ -141,6 +142,7 @@ export function registerWarmupUiRoutes(app: FastifyInstance): void {
         defaults,
         poolScope: body.poolScope === 'org' ? 'org' : body.poolScope === 'instance' ? 'instance' : undefined,
         filterTag: filterTag && filterTag !== session.org.warmupFilterTag ? filterTag : undefined,
+        tagEnabled: body._settingsForm ? Boolean(body.tagEnabled) : undefined,
         emitWebhooks: body._settingsForm ? Boolean(body.emitWebhooks) : undefined,
         showInSendLog: body._settingsForm ? Boolean(body.showInSendLog) : undefined,
       });
@@ -148,6 +150,13 @@ export function registerWarmupUiRoutes(app: FastifyInstance): void {
     } catch (err) {
       return reply.redirect('/ui/warmup?error=' + encodeURIComponent(errorText(err)));
     }
+  });
+
+  app.post('/ui/warmup/dns/recheck', async (req, reply) => {
+    const session = guardPost(req, reply);
+    if (!session) return;
+    const checked = await refreshDomainHealth({ orgId: session.org.id, force: true });
+    return reply.redirect('/ui/warmup?notice=' + encodeURIComponent(`DNS re-checked for ${checked} domain${checked === 1 ? '' : 's'}.`));
   });
 
   app.post('/ui/warmup/defaults/reset', async (req, reply) => {

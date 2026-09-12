@@ -1,11 +1,11 @@
 /**
  * MIME builders for warmup traffic: openers, replies (with provider-style
- * quoting), forwards and read receipts (MDNs). Every message carries the
- * three identity markers from identity.ts.
+ * quoting), forwards and read receipts (MDNs). Messages carry no marker of
+ * their own: identification is by the Message-ID registry in identity.ts,
+ * plus the optional per-workspace body tag when it is switched on.
  */
 
 import { buildMime } from '../api/messages-send.js';
-import { WARMUP_HEADER, warmupHeaderValue } from './identity.js';
 import { fullName, type Persona } from './content/persona.js';
 
 export type ClientStyle = 'gmail' | 'outlook';
@@ -131,10 +131,10 @@ export interface CommonMessage {
   sentAt?: number;
 }
 
+// No marker header: identification is by registry (both ends are ours), so
+// the message carries nothing a receiver could pattern-match across senders.
 export async function buildWarmupMime(m: CommonMessage): Promise<Buffer> {
-  const headers: Record<string, string> = {
-    [WARMUP_HEADER]: warmupHeaderValue(m.normalizedMessageId),
-  };
+  const headers: Record<string, string> = {};
   if (m.requestReceipt) {
     headers['Disposition-Notification-To'] = addressOf(m.from);
   }
@@ -181,7 +181,6 @@ export function buildMdnMime(input: {
     `Date: ${date}`,
     'MIME-Version: 1.0',
     'Auto-Submitted: auto-replied',
-    `${WARMUP_HEADER}: ${warmupHeaderValue(input.normalizedMessageId)}`,
     `Content-Type: multipart/report; report-type=disposition-notification; boundary="${boundary}"`,
     '',
     `--${boundary}`,

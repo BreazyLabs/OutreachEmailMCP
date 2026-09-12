@@ -9,6 +9,7 @@ import { startWarmupExecutor, executorTick } from './executor.js';
 import { spamSweepTick, missingSweepTick } from './detector.js';
 import { seedTemplateScripts, replenishScripts } from './content/scripts.js';
 import { pruneTasks } from './tasks.js';
+import { refreshDomainHealth } from './dns-health.js';
 
 export function startWarmupEngine(): () => void {
   if (!config.WARMUP_ENABLED) {
@@ -41,6 +42,9 @@ export function startWarmupEngine(): () => void {
   supplier.unref();
   const pruner = setInterval(safe('task pruner', () => pruneTasks()), 6 * 3600_000);
   pruner.unref();
+  const dnsTimer = setInterval(safe('dns health', () => refreshDomainHealth()), 6 * 3600_000);
+  dnsTimer.unref();
+  setTimeout(safe('dns health', () => refreshDomainHealth()), 8_000).unref();
 
   // First pass right away so a restart picks the day back up within seconds.
   setTimeout(safe('planner', () => planAll()), 2_000).unref();
@@ -55,5 +59,6 @@ export function startWarmupEngine(): () => void {
     clearInterval(missing);
     clearInterval(supplier);
     clearInterval(pruner);
+    clearInterval(dnsTimer);
   };
 }

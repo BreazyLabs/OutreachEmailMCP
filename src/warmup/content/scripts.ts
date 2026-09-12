@@ -197,8 +197,21 @@ export function pickScript(
       )
       .all(language) as Record<string, unknown>[]
   ).map(rowToScript);
-  const candidates = all.filter((s) => !exclude.has(s.id));
-  const pool = candidates.length > 0 ? candidates : all;
+  // A script that already opened its share of conversations today is out,
+  // whatever its lifetime use count: repetition on the same day is what a
+  // receiver notices.
+  const dayStart = Date.now() - 24 * 3600_000;
+  const usedToday = new Map(
+    (
+      sqlite
+        .prepare(`SELECT script_id, COUNT(*) AS n FROM warmup_threads WHERE created_at > ? AND script_id IS NOT NULL GROUP BY script_id`)
+        .all(dayStart) as { script_id: string; n: number }[]
+    ).map((r) => [r.script_id, r.n]),
+  );
+  const candidates = all.filter(
+    (s) => !exclude.has(s.id) && (usedToday.get(s.id) ?? 0) < config.WARMUP_SCRIPT_MAX_USES_PER_DAY,
+  );
+  const pool = candidates.length > 0 ? candidates : all.filter((s) => !exclude.has(s.id));
   if (pool.length === 0) {
     if (language !== 'en') return pickScript('en', register, rng, exclude);
     return null;

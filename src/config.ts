@@ -108,8 +108,11 @@ const envSchema = z.object({
   WARMUP_LLM_MODEL: z.string().default('gpt-4o-mini'),
   // Cost guard: LLM calls per UTC day, instance-wide.
   WARMUP_LLM_DAILY_CALL_BUDGET: z.coerce.number().int().min(0).default(200),
-  // Unused scripts to keep on hand per language; topped up in batches of 20.
-  WARMUP_SCRIPT_POOL_MIN: z.coerce.number().int().min(0).default(60),
+  // Unused scripts to keep on hand per language; topped up in batches.
+  WARMUP_SCRIPT_POOL_MIN: z.coerce.number().int().min(0).default(200),
+  // A script opens at most this many conversations per day across the pool,
+  // so the same subject does not show up in dozens of mailboxes at once.
+  WARMUP_SCRIPT_MAX_USES_PER_DAY: z.coerce.number().int().min(1).default(5),
   // Share of conversations that reuse an already-used script (with its
   // rotating words re-rolled) rather than a fresh one. Real mailboxes repeat
   // themselves; a pool where every message is unique looks generated.

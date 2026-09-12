@@ -44,6 +44,12 @@ export function healthOf(a: AccountWarmupSummary): Health {
     reasons.push('No mailbox-write access: cannot read, star or rescue');
     score -= 10;
   }
+  if (a.dns.checkedAt) {
+    if (!a.dns.spf) { reasons.push('Domain has no valid SPF record'); score -= 15; }
+    if (!a.dns.dkim) { reasons.push('No DKIM key found for the domain'); score -= 15; }
+    if (!a.dns.dmarc) { reasons.push('Domain has no DMARC record'); score -= 10; }
+    else if (a.dns.dmarcPolicy === 'none') { reasons.push('DMARC policy is p=none'); score -= 3; }
+  }
   if (p.bounced > 0) {
     reasons.push(`${p.bounced} bounce${p.bounced === 1 ? '' : 's'} this week`);
     score -= Math.min(45, 15 * p.bounced);

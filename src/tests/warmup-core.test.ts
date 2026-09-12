@@ -62,6 +62,7 @@ describe('warmup health and prefilled forms', () => {
     placement7d: { inbox: 90, spam: 0, category: 0, missing: 0, bounced: 0, pending: 3, total: 93 },
     inboxRate7d: 100, spamRate7d: 0, rescued7d: 0, repliesSent7d: 20, forwards7d: 2, receipts7d: 1,
     throttlePercent: 100, pauseReason: null, pausedUntil: null, canWrite: true, pendingTasks: 4, lastEvent: null, timezone: 'UTC',
+    dns: { verdict: 'ok' as const, issues: [], checkedAt: Date.now(), spf: true, dkim: true, dmarc: true, dmarcPolicy: 'quarantine' },
   };
   it('scores placement, interventions and scope, and rolls up by weight', async () => {
     const { healthOf, orgHealth } = await import('../warmup/health.js');
@@ -77,6 +78,9 @@ describe('warmup health and prefilled forms', () => {
     expect(healthOf({ ...base, placement7d: { inbox: 2, spam: 0, category: 0, missing: 0, bounced: 0, pending: 1, total: 3 } }).label).toBe('no_data');
     const stalled = { ...base, todaySent: 0, placement7d: { inbox: 0, spam: 0, category: 0, missing: 0, bounced: 0, pending: 0, total: 0 } };
     expect(healthOf(stalled).label).toBe('at_risk');
+    const noDns = healthOf({ ...base, dns: { ...base.dns, spf: false, dkim: false, dmarc: false } });
+    expect(noDns.score).toBe(60);
+    expect(noDns.reasons.some((r) => r.includes('SPF'))).toBe(true);
     const org = orgHealth([base, spammy, { ...base, enabled: false, state: 'off' as const }]);
     expect(org.counts).toMatchObject({ healthy: 1, watch: 1, off: 1 });
     expect(org.score).toBe(84); // weighted toward the two with data
@@ -206,8 +210,9 @@ describe('warmup identity and task queue (db-backed)', () => {
     const { registerMessage } = await import('../warmup/ledger.js');
     const tag = identity.ensureOrgTag(orgId);
     expect(tag).toMatch(/^[A-Z0-9]{7}$/);
-    const id = identity.newWarmupMessageId('core@example.com');
-    expect(id.header).toMatch(/^<wu\..+@example\.com>$/);
+    const id = identity.newWarmupMessageId('core@example.com', 'google');
+    expect(id.header).toMatch(/^<CA[A-Za-z0-9_-]{52}@mail\.gmail\.com>$/);
+    expect(identity.newWarmupMessageId('core@example.com', 'microsoft').header).toMatch(/^<[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}@example\.com>$/);
     registerMessage({
       threadId: 't1', turn: 0, kind: 'open', fromAccountId: accountId, toAccountId: 'other',
       rfcMessageId: id.normalized, subject: 'Hello', contentSource: 'template', localDate: '2026-09-08',
@@ -308,7 +313,9 @@ describe('warmup mime', () => {
     });
     const parsed = await simpleParser(raw);
     expect(parsed.messageId).toBe(id.header);
-    expect(String(parsed.headers.get(WARMUP_HEADER.toLowerCase()))).toMatch(/^v1; /);
+    // No marker header of any kind on the wire.
+    expect(parsed.headers.get(WARMUP_HEADER.toLowerCase())).toBeUndefined();
+    expect([...parsed.headers.keys()].filter((k) => k.startsWith('x-'))).toEqual([]);
     expect(JSON.stringify(parsed.headers.get('disposition-notification-to'))).toContain('alice@a.test');
     expect(parsed.from?.text).toBe('"Alice Ash" <alice@a.test>');
     expect(parsed.text).toContain('TAG1234');
@@ -341,8 +348,39 @@ describe('warmup mime', () => {
     const mp = await simpleParser(mdn);
     expect(mp.subject).toBe('Read: Quick question');
     expect(mdn.toString()).toContain('report-type=disposition-notification');
+    expect(mdn.toString()).not.toContain('X-OEM');
     expect(mdn.toString()).toContain(`Original-Message-ID: ${id.header}`);
     expect(mdn.toString()).toContain('Disposition: manual-action/MDN-sent-manually; displayed');
+  });
+});
+
+describe('domain DNS health', () => {
+  it('reads SPF, DKIM, DMARC and MX through an injected resolver', async () => {
+    const { checkDomain } = await import('../warmup/dns-health.js');
+    const records: Record<string, string[]> = {
+      'good.test': ['v=spf1 include:_spf.google.com ~all', 'google-site-verification=abc'],
+      '_dmarc.good.test': ['v=DMARC1; p=quarantine; rua=mailto:x@good.test'],
+      'google._domainkey.good.test': ['v=DKIM1; k=rsa; p=MIIB'],
+      'bare.test': [],
+    };
+    const resolver = {
+      txt: async (n: string) => records[n] ?? [],
+      mx: async (n: string) => (n === 'good.test' ? [{ exchange: 'aspmx.l.google.com', priority: 1 }] : []),
+    };
+    const good = await checkDomain('good.test', resolver);
+    expect(good).toMatchObject({ spfOk: true, dkimOk: true, dmarcOk: true, mxOk: true, dmarcPolicy: 'quarantine', dkimSelectors: ['google'] });
+    expect(good.issues).toEqual([]);
+    const bare = await checkDomain('bare.test', resolver);
+    expect(bare).toMatchObject({ spfOk: false, dkimOk: false, dmarcOk: false, mxOk: false });
+    expect(bare.issues.length).toBe(4);
+    const weak = await checkDomain('weak.test', {
+      txt: async (n) => (n === 'weak.test' ? ['v=spf1 +all'] : n === '_dmarc.weak.test' ? ['v=DMARC1; p=none'] : n === 'selector1._domainkey.weak.test' ? ['v=DKIM1; p=abc'] : []),
+      mx: async () => [{ exchange: 'weak-test.mail.protection.outlook.com', priority: 0 }],
+    });
+    expect(weak.dmarcOk).toBe(true);
+    expect(weak.issues.some((i) => i.includes('+all'))).toBe(true);
+    expect(weak.issues.some((i) => i.includes('p=none'))).toBe(true);
+    expect(weak.issues.some((i) => i.includes('spf.protection.outlook.com'))).toBe(true);
   });
 });
 
@@ -351,11 +389,13 @@ describe('warmup content', () => {
     const { validateScript } = await import('../warmup/content/llm.js');
     const { renderTurn } = await import('../warmup/content/scripts.js');
     const { rngFrom } = await import('../warmup/rng.js');
-    const good = validateScript({ subject: 'Catching up', register: 'casual', topic: 'x', turns: ['It has been a while since we last spoke and I wanted to see how things are going on your side of the office these days.', 'Things are good here thanks for asking, the new project keeps everyone busy but in a good way overall I would say.'] }, 'en');
+    const good = validateScript({ subject: 'Catching {up|on}', register: 'casual', topic: 'x', turns: ['It has been a while since we last spoke and I wanted to see how things are going on your side of the office these days.', 'Things are good here thanks for asking, the new project keeps everyone busy but in a good way overall I would say.'] }, 'en');
     expect(good).not.toBeNull();
-    expect(validateScript({ subject: 'Special offer', turns: ['Click here https://x.y for a limited time offer that you will not want to miss at all this week.'] }, 'en')).toBeNull();
-    expect(validateScript({ subject: 'Hi', turns: ['Too short.'] }, 'en')).toBeNull();
+    expect(validateScript({ subject: 'Special {offer|deal}', turns: ['Click here https://x.y for a limited time offer that you will not want to miss at all this week.'] }, 'en')).toBeNull();
+    expect(validateScript({ subject: 'Hi {there|all}', turns: ['Too short.'] }, 'en')).toBeNull();
     expect(validateScript({ subject: 'Hi [Name]', turns: ['A perfectly ordinary sentence that is long enough to pass the word count requirement for a turn.'] }, 'en')).toBeNull();
+    // A subject without a rotating word would repeat verbatim across the pool.
+    expect(validateScript({ subject: 'Catching up', turns: ['A perfectly ordinary sentence that is long enough to pass the word count requirement for a turn.'] }, 'en')).toBeNull();
     const from = { firstName: 'Alice', lastName: 'Ash', role: null, company: 'Acme', signOff: 'Best' };
     const to = { firstName: 'Bob', lastName: null, role: null, company: null, signOff: null };
     const a = renderTurn('Are you around this week?', 'en', from, to, rngFrom('r1'), { includeHtml: true, tag: 'ZZ99' });
@@ -394,8 +434,8 @@ describe('warmup content', () => {
     const { validateScript } = await import('../warmup/content/llm.js');
     const long = 'It has been a while since we last spoke and I wanted to see how things are going on your side of the office these days.';
     expect(validateScript({ subject: 'Catching {up|on}', turns: [long + ' {Let me know|Tell me} when suits.'] }, 'en')).not.toBeNull();
-    expect(validateScript({ subject: 'Hi', turns: [long + ' Regards {Name}.'] }, 'en')).toBeNull();
-    expect(validateScript({ subject: 'Hi', turns: [long + ' {broken|group'] }, 'en')).toBeNull();
+    expect(validateScript({ subject: 'Hi {there|all}', turns: [long + ' Regards {Name}.'] }, 'en')).toBeNull();
+    expect(validateScript({ subject: 'Hi {there|all}', turns: [long + ' {broken|group'] }, 'en')).toBeNull();
   });
 
   it('derives personas from display names, addresses and domains', async () => {

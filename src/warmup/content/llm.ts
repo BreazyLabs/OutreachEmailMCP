@@ -69,7 +69,7 @@ const SYSTEM_PROMPT = `You write short, ordinary email conversations between two
 Rules:
 - Each script has a subject and 1 to 4 turns; each turn is one message. The first turn is 25 to 100 words of plain prose in 1 to 3 short paragraphs; later turns may be shorter, down to a single line, the way real threads tail off.
 - Turns alternate between the two people. No greeting line and no sign-off; those are added later.
-- Each script is reused several times, so mark 3 to 6 places per turn where a word or short phrase can rotate, using spintax: {quick|short|brief}, {let me know|tell me|give me a shout}. Alternatives must all fit the sentence. Subjects may carry one spintax group too.
+- Each script is reused several times, so mark 3 to 6 places per turn where a word or short phrase can rotate, using spintax: {quick|short|brief}, {let me know|tell me|give me a shout}. Alternatives must all fit the sentence. EVERY subject must contain exactly one spintax group with 2 or 3 alternatives.
 - No links, URLs, email addresses, phone numbers, prices, product names, company names, or placeholders like [Name].
 - No sales language, no offers, no "reaching out", no exclamation marks beyond one per script.
 - Vary the topics: scheduling, follow-ups, small questions, thanks, feedback, logistics, out-of-office notes, casual catch-ups, recommendations, weekend plans.
@@ -175,6 +175,8 @@ export function checkScript(raw: unknown, language: string): { script: Generated
   if (subject.length < 3 || subject.length > 70) return { reason: `subject length ${subject.length}` };
   if (BANNED.test(subject)) return { reason: `subject banned content: ${subject}` };
   if (/^(re|fwd?):/i.test(subject)) return { reason: 'subject starts with Re/Fwd' };
+  if (!/\{[^{}]*\|[^{}]*\}/.test(subject)) return { reason: 'subject without spintax' };
+  if (!spintaxBalanced(subject)) return { reason: 'subject braces unbalanced' };
   const turns = s.turns.map((t) => (typeof t === 'string' ? t.trim() : '')).filter(Boolean);
   if (turns.length < 1 || turns.length > 5) return { reason: `${turns.length} turns` };
   let exclamations = 0;

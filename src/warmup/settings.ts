@@ -86,7 +86,11 @@ export const warmupSettingsSchema = z.object({
   register: z.enum(['mixed', 'casual', 'business']).default('mixed'),
   // --- tidy-up in the human owner's real inbox ---
   cleanupMode: z.enum(['none', 'archive', 'label', 'trash']).default('archive'),
-  cleanupAfterDays: z.number().int().min(1).max(30).default(3),
+  // Chance a received warmup message is tidied at all, and the window (in
+  // days after arrival) the tidy-up is drawn from. Real people are messy.
+  cleanupRate: pct(70),
+  cleanupAfterDays: z.number().int().min(1).max(30).default(2),
+  cleanupMaxDays: z.number().int().min(1).max(60).default(10),
   // --- pairing ---
   allowSameDomain: z.boolean().default(true),
   allowSameOrg: z.boolean().default(true),
@@ -96,8 +100,6 @@ export const warmupSettingsSchema = z.object({
   slowAtSpamRate: pct(10),
   pauseAtSpamRate: pct(25),
   cooldownDays: z.number().int().min(1).max(14).default(2),
-  // Optional combined cap on warmup + real sends per day; warmup yields.
-  maxTotalPerDay: z.number().int().min(1).max(5000).nullable().default(null),
 });
 
 export type WarmupSettings = z.infer<typeof warmupSettingsSchema>;
@@ -242,6 +244,7 @@ export function resolveWarmupSettings(
   if (resolved.rescueDelayMaxMinutes < resolved.rescueDelayMinMinutes) {
     resolved.rescueDelayMaxMinutes = resolved.rescueDelayMinMinutes;
   }
+  if (resolved.cleanupMaxDays < resolved.cleanupAfterDays) resolved.cleanupMaxDays = resolved.cleanupAfterDays;
   if (parseHHMM(resolved.sendWindowEnd) <= parseHHMM(resolved.sendWindowStart) + 30) {
     // A window shorter than half an hour cannot hold a day's sends.
     resolved.sendWindowStart = INSTANCE_DEFAULTS.sendWindowStart;
@@ -299,7 +302,6 @@ export const WARMUP_FIELDS: FieldSpec[] = [
   { key: 'dailyLimit', label: 'Daily limit', type: 'int', group: 'Volume', min: 1, max: 500, help: 'Steady-state warmup sends per day (capped by the instance/plan).' },
   { key: 'slowStart', label: 'Slow start', type: 'bool', group: 'Volume', help: 'Off starts at the daily limit on day one (for mailboxes already warm elsewhere).' },
   { key: 'randomizePercent', label: 'Randomize ±%', type: 'percent', group: 'Volume', min: 0, max: 50, help: 'Daily target varies by up to this much so counts never form a straight line.' },
-  { key: 'maxTotalPerDay', label: 'Max total sends/day', type: 'int', group: 'Volume', min: 1, max: 5000, help: 'Optional cap on warmup + real sends combined; warmup yields to real mail.' },
 
   { key: 'timezone', label: 'Timezone', type: 'text', group: 'Calendar', help: 'IANA name, e.g. Europe/Amsterdam. Anchors the send window and the day boundary.' },
   { key: 'sendWindowStart', label: 'Window start', type: 'time', group: 'Calendar', help: 'Earliest local send time.' },
@@ -330,10 +332,12 @@ export const WARMUP_FIELDS: FieldSpec[] = [
   { key: 'fixCategory', label: 'Fix category', type: 'bool', group: 'Placement', help: 'Gmail Promotions/Updates → Primary; Outlook Other → Focused.' },
   { key: 'receiveLimit', label: 'Receive limit/day', type: 'int', group: 'Placement', min: 1, max: 500, help: 'Max warmup mail this mailbox receives per day (blank = 1.5 × daily limit).' },
 
-  { key: 'languages', label: 'Languages', type: 'list', group: 'Content', help: 'Comma-separated ISO codes; a pair talks in a language both list.' },
+  { key: 'languages', label: 'Languages', type: 'list', group: 'Content', help: 'Comma-separated ISO codes, most used first: the first is chosen about two thirds of the time. A pair talks in a language both list.' },
   { key: 'register', label: 'Register', type: 'select', group: 'Content', help: '', options: [{ value: 'mixed', label: 'Mixed' }, { value: 'casual', label: 'Casual' }, { value: 'business', label: 'Business' }] },
   { key: 'cleanupMode', label: 'Cleanup', type: 'select', group: 'Content', help: 'What happens to warmup mail in the owner\'s real inbox after engagement.', options: [{ value: 'none', label: 'Leave in inbox' }, { value: 'archive', label: 'Archive' }, { value: 'label', label: 'Move to "Warmup" label/folder' }, { value: 'trash', label: 'Trash' }] },
-  { key: 'cleanupAfterDays', label: 'Cleanup after (days)', type: 'int', group: 'Content', min: 1, max: 30, help: '' },
+  { key: 'cleanupRate', label: 'Cleanup chance', type: 'percent', group: 'Content', min: 0, max: 100, help: 'Share of received warmup mail that gets tidied away at all.' },
+  { key: 'cleanupAfterDays', label: 'Cleanup earliest (days)', type: 'int', group: 'Content', min: 1, max: 30, help: 'Tidy-up happens at a random point between this and the latest.' },
+  { key: 'cleanupMaxDays', label: 'Cleanup latest (days)', type: 'int', group: 'Content', min: 1, max: 60, help: '' },
 
   { key: 'allowSameDomain', label: 'Allow same domain', type: 'bool', group: 'Pairing', help: 'Needed for internal threads.' },
   { key: 'allowSameOrg', label: 'Allow same workspace', type: 'bool', group: 'Pairing', help: '' },

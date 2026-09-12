@@ -23,6 +23,7 @@ import {
 } from './state.js';
 import { setOrgTag, invalidateTagCache } from './identity.js';
 import { healthOf, orgHealth } from './health.js';
+import { connectedDomains, domainHealthFor, issuesOf, dnsVerdict, refreshDomainHealth } from './dns-health.js';
 import { logActivity } from '../observability/activity.js';
 
 const personaSchema = z
@@ -48,6 +49,7 @@ const orgPatchSchema = z
     defaults: z.record(z.unknown()).optional(),
     poolScope: z.enum(['instance', 'org']).optional(),
     filterTag: z.string().min(5).max(16).optional(),
+    tagEnabled: z.boolean().optional(),
     emitWebhooks: z.boolean().optional(),
     showInSendLog: z.boolean().optional(),
   })
@@ -91,6 +93,7 @@ export function applyOrgSettings(orgId: string, input: z.infer<typeof orgPatchSc
   const patch: Partial<typeof org> = {};
   if (input.defaults) patch.warmupDefaultsJson = mergePatch(org.warmupDefaultsJson, validatePatch(input.defaults));
   if (input.poolScope) patch.warmupPoolScope = input.poolScope;
+  if (input.tagEnabled !== undefined) patch.warmupTagEnabled = input.tagEnabled ? 1 : 0;
   if (input.emitWebhooks !== undefined) patch.warmupEmitWebhooks = input.emitWebhooks ? 1 : 0;
   if (input.showInSendLog !== undefined) patch.warmupShowInSendLog = input.showInSendLog ? 1 : 0;
   if (Object.keys(patch).length) db.update(schema.orgs).set(patch).where(eq(schema.orgs.id, orgId)).run();
@@ -163,6 +166,37 @@ export function registerWarmupRoutes(app: FastifyInstance): void {
       health: orgHealth(overview.accounts),
       accounts: overview.accounts.map((a) => ({ ...a, health: healthOf(a) })),
     };
+  });
+
+  app.get('/warmup/dns', async (req, reply) => {
+    if (!requireScope(req, reply, 'read')) return;
+    const domains = connectedDomains(orgOf(req));
+    const rows = domainHealthFor(domains);
+    return {
+      domains: domains.map((d) => {
+        const r = rows.get(d);
+        return {
+          domain: d,
+          verdict: dnsVerdict(r),
+          checkedAt: r?.checkedAt ?? null,
+          spf: r?.spf ?? null,
+          spfOk: !!r?.spfOk,
+          dmarc: r?.dmarc ?? null,
+          dmarcPolicy: r?.dmarcPolicy ?? null,
+          dmarcOk: !!r?.dmarcOk,
+          dkimSelectors: r?.dkimSelectorsJson ? (JSON.parse(r.dkimSelectorsJson) as string[]) : [],
+          dkimOk: !!r?.dkimOk,
+          mx: r?.mxJson ? (JSON.parse(r.mxJson) as string[]) : [],
+          issues: issuesOf(r),
+        };
+      }),
+    };
+  });
+
+  app.post('/warmup/dns/recheck', async (req, reply) => {
+    if (!requireScope(req, reply, 'accounts')) return;
+    const checked = await refreshDomainHealth({ orgId: orgOf(req), force: true });
+    return { checked };
   });
 
   app.get('/warmup/fields', async (req, reply) => {

@@ -177,7 +177,10 @@ describe('warmup end to end', () => {
     // It arrives in Bob's INBOX: the poller hook sees it.
     const raw = fs.readFileSync(job.rawPath!);
     const parsed = await simpleParser(raw);
-    expect(parsed.messageId).toBe(`<${message.rfcMessageId}>`);
+    expect(parsed.messageId!.toLowerCase()).toBe(`<${message.rfcMessageId}>`);
+    expect(parsed.messageId).toMatch(/@mail\.gmail\.com>$/); // Alice is on Google
+    expect([...parsed.headers.keys()].some((k) => k.startsWith('x-'))).toBe(false);
+    expect(parsed.text).not.toContain('BNT'); // no visible tag by default
     const bob = db.select().from(schema.accounts).where(eq(schema.accounts.id, B)).get()!;
     upstream.raws['bob-msg-1'] = raw;
     const verdict = await onInboundMessage(bob, 'bob-msg-1', parsed, raw);
@@ -264,6 +267,42 @@ describe('warmup end to end', () => {
     expect(db.select().from(schema.warmupThreads).where(eq(schema.warmupThreads.id, thread.id)).get()!.state).toBe('abandoned');
   });
 
+  it('identifies a warmup message whose Message-ID was rewritten in transit, and never pairs a persona with itself', async () => {
+    const { db, schema } = await import('../db/index.js');
+    const { eq, and } = await import('drizzle-orm');
+    const { enqueueTask } = await import('../warmup/tasks.js');
+    const { runTask } = await import('../warmup/executor.js');
+    const { onWarmupJobSent } = await import('../warmup/ledger.js');
+    const { onInboundMessage } = await import('../warmup/detector.js');
+    const { loadPool, memberById, partnerWeight } = await import('../warmup/pool.js');
+    const { simpleParser } = await import('mailparser');
+    const { localDate } = await import('../warmup/clock.js');
+
+    // Carol opens to Bob; Bob's provider replaces the Message-ID.
+    db.update(schema.warmupAccounts).set({ todayTarget: 10 }).where(eq(schema.warmupAccounts.accountId, C)).run();
+    const t = enqueueTask({ accountId: C, counterpartyAccountId: B, kind: 'send_open', dueAt: Date.now(), idempotencyKey: 'open:test:rewrite', payload: { partnerAccountId: B, ccAccountId: null, internal: false, requestReceipt: false, date: localDate(Date.now(), 'UTC'), seq: 5 } })!;
+    await runTask(t);
+    const job = db.select().from(schema.sendJobs).where(and(eq(schema.sendJobs.accountId, C), eq(schema.sendJobs.source, 'warmup'))).all().find((j) => JSON.parse(j.envelopeJson).to[0] === 'bob@beta.test')!;
+    onWarmupJobSent(job);
+    const rewritten = fs.readFileSync(job.rawPath!).toString().replace(/^Message-ID: .*$/m, 'Message-ID: <rewritten-by-provider@beta.test>');
+    const parsed = await simpleParser(rewritten);
+    const bob = db.select().from(schema.accounts).where(eq(schema.accounts.id, B)).get()!;
+    const verdict = await onInboundMessage(bob, 'bob-rewritten-1', parsed, Buffer.from(rewritten));
+    expect(verdict.warmup).toBe(true);
+    const landing = db.select().from(schema.warmupLandings).where(and(eq(schema.warmupLandings.messageId, job.warmupMessageId!), eq(schema.warmupLandings.toAccountId, B))).get()!;
+    expect(landing.landed).toBe('inbox');
+
+    // Two mailboxes with the same persona never pair.
+    const { setPersona } = await import('../warmup/state.js');
+    setPersona(A, { firstName: 'Same', lastName: 'Person' });
+    setPersona(B, { firstName: 'Same', lastName: 'Person' });
+    const pool = loadPool();
+    expect(partnerWeight(memberById(pool, A)!, memberById(pool, B)!, { internal: false })).toBe(0);
+    expect(partnerWeight(memberById(pool, A)!, memberById(pool, C)!, { internal: false })).toBeGreaterThan(0);
+    setPersona(A, { firstName: 'Alice', lastName: 'Alpha' });
+    setPersona(B, { firstName: 'Bob', lastName: 'Beta' });
+  });
+
   it('forwards a received message to a third mailbox as a new thread', async () => {
     const { db, schema } = await import('../db/index.js');
     const { eq, and } = await import('drizzle-orm');
@@ -301,7 +340,7 @@ describe('warmup end to end', () => {
     db.update(schema.warmupAccounts).set({ settingsJson: JSON.stringify({ rescueDelayMinMinutes: 0, rescueDelayMaxMinutes: 1, readRate: 100 }) }).where(eq(schema.warmupAccounts.accountId, A)).run();
     const task = enqueueTask({ accountId: C, counterpartyAccountId: A, kind: 'send_open', dueAt: Date.now(), idempotencyKey: 'open:test:spam', payload: { partnerAccountId: A, ccAccountId: null, internal: true, requestReceipt: false, date: localDate(Date.now(), 'UTC'), seq: 9 } })!;
     await runTask(task);
-    const job = db.select().from(schema.sendJobs).where(eq(schema.sendJobs.accountId, C)).get()!;
+    const job = db.select().from(schema.sendJobs).where(eq(schema.sendJobs.accountId, C)).all().find((j) => JSON.parse(j.envelopeJson).to[0] === 'alice@alpha.test')!;
     onWarmupJobSent(job);
     const message = db.select().from(schema.warmupMessages).where(eq(schema.warmupMessages.id, job.warmupMessageId!)).get()!;
     const thread = db.select().from(schema.warmupThreads).where(eq(schema.warmupThreads.id, message.threadId)).get()!;

@@ -13,6 +13,7 @@ import { accountGrantedScopes } from '../imap/index-store.js';
 import { resolveWarmupSettings, effectiveReceiveLimit, type WarmupSettings } from './settings.js';
 import { localDate, localToInstant, shiftDate } from './clock.js';
 import { plannedInboundCount } from './tasks.js';
+import { derivePersona, parsePersona, fullName } from './content/persona.js';
 import type { Rng } from './rng.js';
 import type { Account, Org, WarmupAccount } from '../db/schema.js';
 
@@ -26,6 +27,8 @@ export interface PoolMember {
   polledRecently: boolean;
   /** 7-day inbox placement as a sender, null with fewer than 10 samples. */
   inboxRate7d: number | null;
+  /** Persona full name, lowercased: a person should not email themselves. */
+  personaName: string;
 }
 
 export function domainOf(email: string): string {
@@ -58,6 +61,7 @@ export function loadPool(): PoolMember[] {
       polledRecently:
         (sync?.lastPolledAt ?? 0) > since || account.createdAt > Date.now() - 3600_000,
       inboxRate7d: senderInboxRate(account.id, 7),
+      personaName: fullName(parsePersona(warm.personaJson, derivePersona(account))).toLowerCase(),
     };
   });
 }
@@ -186,6 +190,8 @@ export function eligiblePartners(sender: PoolMember, pool: PoolMember[], q: Part
 }
 
 export function partnerWeight(sender: PoolMember, c: PoolMember, q: PartnerQuery): number {
+  // The same person at two of their own domains does not write to themselves.
+  if (c.personaName && c.personaName === sender.personaName) return 0;
   let w = 1;
   const sameDomain = c.domain === sender.domain;
   if (q.internal) {

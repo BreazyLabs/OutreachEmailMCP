@@ -29,19 +29,29 @@ const HEADER_VERSION = 'v1';
 
 // No 0/O/1/I so the tag is unambiguous when read aloud or retyped.
 const tagAlphabet = customAlphabet('23456789ABCDEFGHJKLMNPQRSTUVWXYZ', 7);
-// Message-IDs are generated lowercase so the on-the-wire header and the
-// normalised registry key are the same string.
-const idAlphabet = customAlphabet('abcdefghijklmnopqrstuvwxyz0123456789', 20);
+// Message-IDs mimic what each provider's own clients produce, so a warmup
+// message is not recognisable by its id shape. The registry stores the
+// normalised (lowercased) form; lookups normalise too.
+const gmailAlphabet = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-', 52);
+const hexAlphabet = customAlphabet('0123456789abcdef', 32);
 
 export function generateFilterTag(): string {
   return tagAlphabet();
 }
 
-/** `<wu.xxxx@domain>` — the id we put on the wire, plus its normalised form. */
-export function newWarmupMessageId(senderEmail: string): { header: string; normalized: string } {
-  const domain = senderEmail.split('@')[1] ?? 'warmup.local';
-  const id = `wu.${idAlphabet()}@${domain.toLowerCase()}`;
-  return { header: `<${id}>`, normalized: id };
+/** A Message-ID in the sending provider's house style, plus its normalised form. */
+export function newWarmupMessageId(senderEmail: string, provider: string = 'google'): { header: string; normalized: string } {
+  const domain = (senderEmail.split('@')[1] ?? 'localhost').toLowerCase();
+  let id: string;
+  if (provider === 'google') {
+    // Gmail and Workspace clients: "CA" + 52 base64url chars @mail.gmail.com
+    id = `CA${gmailAlphabet()}@mail.gmail.com`;
+  } else {
+    // Outlook desktop / many clients: a UUID-shaped local part at the domain
+    const h = hexAlphabet();
+    id = `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}@${domain}`;
+  }
+  return { header: `<${id}>`, normalized: id.toLowerCase() };
 }
 
 function hmacFor(normalizedId: string): string {
@@ -121,6 +131,18 @@ export function activeTags(): string[] {
 
 export function invalidateTagCache(): void {
   tagCache = { tags: [], refreshedAt: 0 };
+}
+
+/** The tag to stamp into outgoing mail: the org's tag only when the org
+ *  switched the visible tag on; null otherwise (registry-only identification). */
+export function orgTagIfEnabled(orgId: string): string | null {
+  const org = db
+    .select({ tag: schema.orgs.warmupFilterTag, enabled: schema.orgs.warmupTagEnabled })
+    .from(schema.orgs)
+    .where(eq(schema.orgs.id, orgId))
+    .get();
+  if (!org?.enabled) return null;
+  return org.tag ?? ensureOrgTag(orgId);
 }
 
 /** The org's tag, generated on first use. */

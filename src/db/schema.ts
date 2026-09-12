@@ -26,6 +26,10 @@ export const orgs = sqliteTable('orgs', {
   // external tools (and our own filters) can recognise it. Generated on first
   // enable; editable.
   warmupFilterTag: text('warmup_filter_tag'),
+  // Off by default: the proxy identifies its own warmup mail through the
+  // registry, so the visible tag only matters for tools that read the
+  // mailboxes without going through the proxy — and it is a fingerprint.
+  warmupTagEnabled: integer('warmup_tag_enabled').notNull().default(0),
   // A tag that was replaced keeps matching for a while so in-flight threads
   // still filter. JSON [{tag, until}].
   warmupOldTagsJson: text('warmup_old_tags_json'),
@@ -497,7 +501,28 @@ export const warmupScripts = sqliteTable(
   (t) => [index('warmup_scripts_pick').on(t.language, t.register, t.retired, t.usedCount)],
 );
 
+// Sending-domain DNS posture (SPF, DKIM, DMARC, MX), refreshed daily: warmup
+// cannot fix a domain that fails authentication, so the dashboard says so.
+export const domainHealth = sqliteTable('domain_health', {
+  domain: text('domain').primaryKey(),
+  checkedAt: integer('checked_at').notNull(),
+  spf: text('spf'),
+  spfOk: integer('spf_ok').notNull().default(0),
+  dmarc: text('dmarc'),
+  dmarcPolicy: text('dmarc_policy'),
+  dmarcOk: integer('dmarc_ok').notNull().default(0),
+  // JSON string[] of DKIM selectors that resolve (google, selector1, selector2, …)
+  dkimSelectorsJson: text('dkim_selectors_json'),
+  dkimOk: integer('dkim_ok').notNull().default(0),
+  mxJson: text('mx_json'),
+  mxOk: integer('mx_ok').notNull().default(0),
+  // JSON string[] of human-readable problems
+  issuesJson: text('issues_json'),
+  error: text('error'),
+});
+
 export type Org = typeof orgs.$inferSelect;
+export type DomainHealth = typeof domainHealth.$inferSelect;
 export type WarmupAccount = typeof warmupAccounts.$inferSelect;
 export type WarmupThread = typeof warmupThreads.$inferSelect;
 export type WarmupMessage = typeof warmupMessages.$inferSelect;

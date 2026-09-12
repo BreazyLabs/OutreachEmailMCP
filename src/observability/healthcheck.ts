@@ -405,6 +405,19 @@ function checkWarmup(org: Org): Finding[] {
       detail: 'The LLM pool is not keeping up. Check the API key, budget (WARMUP_LLM_DAILY_CALL_BUDGET) and the activity log.',
     });
   }
+  const dnsBad = overview.accounts.filter((a) => a.dns.verdict === 'bad');
+  if (dnsBad.length) {
+    const domains = [...new Set(dnsBad.map((a) => a.email.split('@')[1]))];
+    findings.push({
+      severity: 'critical',
+      area: 'dns',
+      title: `${domains.length} sending domain${domains.length === 1 ? '' : 's'} fail${domains.length === 1 ? 's' : ''} SPF, DKIM or DMARC`,
+      detail: domains
+        .slice(0, 6)
+        .map((d) => `${d}: ${dnsBad.find((a) => a.email.endsWith('@' + d))?.dns.issues.slice(0, 2).join('; ')}`)
+        .join(' | '),
+    });
+  }
   const failures = warmupTaskFailures24h(org.id);
   if (failures >= 5) {
     findings.push({

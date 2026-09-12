@@ -7,7 +7,7 @@
  * and a missing sweep for mail that never showed up anywhere.
  */
 
-import { eq, and, asc } from 'drizzle-orm';
+import { eq, and, asc, sql } from 'drizzle-orm';
 import { simpleParser, type ParsedMail } from 'mailparser';
 import { db, schema } from '../db/index.js';
 import { config } from '../config.js';
@@ -209,14 +209,54 @@ export function scheduleEngagement(
 function scheduleCleanup(landing: WarmupLanding, receiver: PoolMember, rng: Rng, base: number): void {
   const s = receiver.settings;
   if (s.cleanupMode === 'none' || !receiver.canWrite || landing.cleanedAt) return;
+  // Not every message, and not on a fixed day: somewhere in the window.
+  if (!rng.chance(s.cleanupRate)) return;
+  const days = s.cleanupAfterDays + rng.next() * Math.max(0, s.cleanupMaxDays - s.cleanupAfterDays);
   enqueueTask({
     accountId: receiver.account.id,
     counterpartyAccountId: landing.fromAccountId,
     kind: 'cleanup',
-    dueAt: base + s.cleanupAfterDays * 24 * 3600_000 + rng.int(0, 6 * 60) * MINUTE,
+    dueAt: base + days * 24 * 3600_000 + rng.int(0, 14 * 60) * MINUTE,
     idempotencyKey: `cleanup:${landing.id}`,
     payload: { landingId: landing.id },
   });
+}
+
+function bareSubject(subject: string | null | undefined): string {
+  return (subject ?? '').replace(/^\s*((re|fwd?|fw)\s*:\s*)+/i, '').trim().toLowerCase();
+}
+
+/**
+ * Marker-free identification: a message from a pool mailbox to this pool
+ * mailbox whose subject matches a registry message that was sent to it in
+ * the last two days and has not landed yet. Covers a provider rewriting the
+ * Message-ID, since the mail carries no other marker on purpose.
+ */
+function matchUnmarkedWarmup(account: Account, parsed: ParsedMail): WarmupMessage | undefined {
+  const fromAddress = parsed.from?.value?.[0]?.address?.toLowerCase();
+  if (!fromAddress) return undefined;
+  const sender = db
+    .select({ id: schema.accounts.id })
+    .from(schema.accounts)
+    .where(eq(schema.accounts.email, fromAddress))
+    .get();
+  if (!sender) return undefined;
+  const subject = bareSubject(parsed.subject);
+  const since = Date.now() - 2 * 24 * 3600_000;
+  const candidates = db
+    .select({ message: schema.warmupMessages, landing: schema.warmupLandings })
+    .from(schema.warmupLandings)
+    .innerJoin(schema.warmupMessages, eq(schema.warmupMessages.id, schema.warmupLandings.messageId))
+    .where(
+      and(
+        eq(schema.warmupLandings.toAccountId, account.id),
+        eq(schema.warmupMessages.fromAccountId, sender.id),
+        sql`${schema.warmupLandings.landed} IS NULL`,
+        sql`${schema.warmupMessages.sentAt} > ${since}`,
+      ),
+    )
+    .all();
+  return candidates.find((c) => bareSubject(c.message.subject) === subject)?.message;
 }
 
 /** Record where a message landed for this recipient (first verdict wins). */
@@ -254,12 +294,16 @@ export async function onInboundMessage(
   raw: Buffer,
   now = Date.now(),
 ): Promise<InboundVerdict> {
-  const identity = isWarmupMessage({
+  let identity = isWarmupMessage({
     messageId: parsed.messageId ?? null,
     header: headerOf(parsed),
     subject: parsed.subject ?? null,
     text: parsed.text ?? null,
   });
+  if (!identity.warmup) {
+    const unmarked = matchUnmarkedWarmup(account, parsed);
+    if (unmarked) identity = { warmup: true, via: 'registry', message: unmarked };
+  }
 
   if (!identity.warmup) {
     // Not ours — but is it on one of our threads?

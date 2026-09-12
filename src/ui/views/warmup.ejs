@@ -104,6 +104,16 @@
 </div>
 
 <h2>Mailboxes</h2>
+<% const dnsBad = overview.accounts.filter((a) => a.dns.verdict === 'bad'); const dnsUnchecked = overview.accounts.filter((a) => a.dns.verdict === 'unchecked'); %>
+<% if (dnsBad.length) { %>
+<div class="alert error">
+  <strong><%= new Set(dnsBad.map((a) => a.email.split('@')[1])).size %> sending domain(s) fail SPF, DKIM or DMARC.</strong> Warmup cannot fix authentication; fix the DNS first. The DNS column shows S/K/D in capitals when present, lowercase when missing; hover for details.
+</div>
+<% } %>
+<div class="row" style="justify-content:space-between; margin:0 0 0.4rem">
+  <span class="muted">DNS column: <b>S</b>PF · D<b>K</b>IM · <b>D</b>MARC, capital = present. Checked every 6 hours.<%= dnsUnchecked.length ? ` ${dnsUnchecked.length} not checked yet.` : '' %></span>
+  <form method="post" action="/ui/warmup/dns/recheck"><input type="hidden" name="_csrf" value="<%= csrf %>"><button type="submit" class="secondary">Re-check DNS now</button></form>
+</div>
 <form method="post" action="/ui/warmup/bulk" id="bulk">
   <input type="hidden" name="_csrf" value="<%= csrf %>">
   <div class="card">
@@ -140,6 +150,7 @@
         <th class="sortable" data-key="email">Mailbox</th>
         <th class="sortable" data-key="health">Health</th>
         <th class="sortable" data-key="state">State</th>
+        <th class="sortable" data-key="dns" title="SPF, DKIM, DMARC and MX of the sending domain">DNS</th>
         <th>Trend 14d</th>
         <th class="sortable num" data-key="day">Day</th>
         <th class="sortable num" data-key="today">Today</th>
@@ -157,7 +168,8 @@
           data-enabled="<%= a.enabled ? '1' : '0' %>" data-healthlabel="<%= h.label %>"
           data-s-email="<%= a.email %>" data-s-health="<%= h.score === null ? -1 : h.score %>" data-s-state="<%= a.state %>"
           data-s-day="<%= a.enabled ? a.rampDay : -1 %>" data-s-today="<%= a.todaySent %>" data-s-received="<%= a.todayReceived %>"
-          data-s-inbox="<%= a.inboxRate7d === null ? -1 : a.inboxRate7d %>" data-s-spam="<%= a.placement7d.spam + a.placement7d.missing %>" data-s-replies="<%= a.repliesSent7d %>">
+          data-s-inbox="<%= a.inboxRate7d === null ? -1 : a.inboxRate7d %>" data-s-spam="<%= a.placement7d.spam + a.placement7d.missing %>" data-s-replies="<%= a.repliesSent7d %>"
+          data-s-dns="<%= { ok: 3, warn: 2, bad: 1, unchecked: 0 }[a.dns.verdict] %>">
         <td><input type="checkbox" name="accountIds" value="<%= a.accountId %>" class="rowcheck"></td>
         <td>
           <a href="/ui/accounts/<%= a.accountId %>"><%= a.email %></a>
@@ -172,6 +184,11 @@
         <td>
           <span class="badge <%= a.state %>"><%= stateLabel(a.state) %></span>
           <% if (a.throttlePercent < 100 && (a.state === 'ramping' || a.state === 'steady')) { %><span class="muted" title="Volume reduced by the reputation controller"><%= a.throttlePercent %>%</span><% } %>
+        </td>
+        <td>
+          <% const dv = a.dns.verdict; %>
+          <span class="health <%= dv === 'ok' ? 'healthy' : dv === 'warn' ? 'watch' : dv === 'bad' ? 'at_risk' : 'no_data' %>" title="<%= a.dns.issues.length ? a.dns.issues.join(' · ') : dv === 'unchecked' ? 'Not checked yet' : 'SPF, DKIM, DMARC and MX all present' %>"><span class="dot"></span><%= dv === 'unchecked' ? '…' : (a.dns.spf ? 'S' : 's') + (a.dns.dkim ? 'K' : 'k') + (a.dns.dmarc ? 'D' : 'd') %></span>
+          <% if (dv === 'bad' || dv === 'warn') { %><div class="reasons"><%= a.dns.issues[0] %></div><% } %>
         </td>
         <td><%- sparks[a.accountId] || '' %></td>
         <td class="num"><%= a.enabled ? a.rampDay : '—' %></td>
@@ -214,8 +231,9 @@
         </select>
       </div>
       <div>
-        <label class="muted" style="display:block; font-size:0.78rem">Filter tag <span title="Stamped as the last line of every warmup message so external tools can filter it. Changing it keeps the old one matching for 30 days.">ⓘ</span></label>
-        <input class="tagbox" name="filterTag" value="<%= overview.org.filterTag || '' %>" placeholder="generated on first enable" maxlength="16" style="width:12ch">
+        <label class="muted" style="display:block; font-size:0.78rem">Visible filter tag <span title="Off: warmup mail carries no marker at all; the proxy identifies it by its own registry. On: the tag is the last line of every message so tools reading the mailbox directly can filter it — but it is a fingerprint shared by every sender.">ⓘ</span></label>
+        <label style="font-size:0.85rem"><input type="checkbox" name="tagEnabled" value="1" <%= overview.org.tagEnabled ? 'checked' : '' %>> stamp tag into messages</label>
+        <input class="tagbox" name="filterTag" value="<%= overview.org.filterTag || '' %>" placeholder="generated when enabled" maxlength="16" style="width:12ch">
       </div>
       <div>
         <label class="muted" style="display:block; font-size:0.78rem">Visibility</label>

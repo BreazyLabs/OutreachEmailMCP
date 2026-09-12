@@ -128,6 +128,15 @@
     </div>
   </div>
   <% } %>
+  <% if (ws.dns.checkedAt) { %>
+  <div class="muted" style="margin:0.4rem 0">
+    Domain DNS (<%= new Date(ws.dns.checkedAt).toLocaleString() %>):
+    <span style="color:<%= ws.dns.spf ? 'var(--ok)' : 'var(--err)' %>">SPF <%= ws.dns.spf ? '✓' : '✗' %></span> ·
+    <span style="color:<%= ws.dns.dkim ? 'var(--ok)' : 'var(--err)' %>">DKIM <%= ws.dns.dkim ? '✓' : '✗' %></span> ·
+    <span style="color:<%= ws.dns.dmarc ? 'var(--ok)' : 'var(--err)' %>">DMARC <%= ws.dns.dmarc ? (ws.dns.dmarcPolicy ? 'p=' + ws.dns.dmarcPolicy : '✓') : '✗' %></span>
+    <% if (ws.dns.issues.length) { %><ul class="reasons"><% for (const i of ws.dns.issues) { %><li><%= i %></li><% } %></ul><% } %>
+  </div>
+  <% } %>
   <div class="wstats">
     <span>Today <b><%= ws.todaySent %></b><span class="muted">/<%= ws.todayTarget %></span> sent, <b><%= ws.todayReceived %></b><span class="muted">/<%= ws.receiveLimit %></span> received</span>
     <span>7 days: inbox <b><%= ws.placement7d.inbox + ws.placement7d.category %></b> · spam <b style="<%= ws.placement7d.spam ? 'color:var(--err)' : '' %>"><%= ws.placement7d.spam %></b> · missing <b><%= ws.placement7d.missing %></b> · pending <b><%= ws.placement7d.pending %></b><% if (ws.inboxRate7d !== null) { %> · <b><%= ws.inboxRate7d.toFixed(0) %>%</b> inbox rate<% } %></span>
