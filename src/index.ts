@@ -187,6 +187,17 @@ async function main() {
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
 }
 
+// A rejected promise nobody awaited must not take the whole edge down: log
+// it and carry on. A thrown exception outside any handler leaves the process
+// in an unknown state, so that one still exits (the swarm restarts us).
+process.on('unhandledRejection', (reason) => {
+  logger.error({ err: String(reason) }, 'unhandled promise rejection');
+});
+process.on('uncaughtException', (err) => {
+  logger.fatal({ err: String(err), stack: err.stack }, 'uncaught exception; exiting');
+  process.exit(1);
+});
+
 main().catch((err) => {
   logger.fatal({ err }, 'failed to start');
   process.exit(1);

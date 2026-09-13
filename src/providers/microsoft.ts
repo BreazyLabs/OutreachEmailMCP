@@ -1,4 +1,5 @@
 import { getAccessToken } from '../auth/tokens.js';
+import { upstreamSignal } from './http.js';
 import { throwForResponse, PermanentError } from './errors.js';
 import type {
   Provider,
@@ -39,6 +40,7 @@ async function graphFetch(
   const token = await getAccessToken(accountId);
   const res = await fetch(url, {
     ...init,
+    signal: init.signal ?? upstreamSignal(),
     headers: { Authorization: `Bearer ${token}`, ...(init.headers ?? {}) },
   });
   if (!res.ok) {

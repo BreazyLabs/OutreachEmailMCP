@@ -13,6 +13,8 @@ import type { Account, ImapMessage } from '../db/schema.js';
 
 // Emits ('indexed', accountId) whenever new messages land — IMAP IDLE hooks this.
 export const imapIndexEvents = new EventEmitter();
+// One listener per open IMAP session; sequencers keep dozens of connections.
+imapIndexEvents.setMaxListeners(0);
 
 export interface EnvelopeAddress {
   name: string | null;

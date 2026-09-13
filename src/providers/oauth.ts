@@ -1,4 +1,5 @@
 import { config } from '../config.js';
+import { upstreamSignal } from './http.js';
 import { AuthError, isMailboxUnavailable, RetryableError } from './errors.js';
 
 export type ProviderName = 'google' | 'microsoft';
@@ -125,6 +126,7 @@ async function tokenRequest(
         client_secret: ep.clientSecret,
         ...grant,
       }),
+      signal: upstreamSignal(),
     });
   } catch (err) {
     throw new RetryableError(`Token endpoint unreachable: ${String(err)}`);
@@ -177,7 +179,10 @@ export async function mailboxIsReachable(
       : 'https://graph.microsoft.com/v1.0/me/mailFolders/inbox';
   let res: Response;
   try {
-    res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+    res = await fetch(url, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      signal: upstreamSignal(),
+    });
   } catch {
     // Network trouble is not evidence of a missing mailbox — let it through
     // rather than blocking a connect on a blip.
@@ -198,6 +203,7 @@ export async function fetchUserProfile(
   if (provider === 'google') {
     const res = await fetch('https://openidconnect.googleapis.com/v1/userinfo', {
       headers: { Authorization: `Bearer ${accessToken}` },
+      signal: upstreamSignal(),
     });
     if (!res.ok) throw new AuthError(`userinfo failed: HTTP ${res.status}`);
     const body = (await res.json()) as { email?: string; name?: string };
@@ -206,6 +212,7 @@ export async function fetchUserProfile(
   }
   const res = await fetch('https://graph.microsoft.com/v1.0/me', {
     headers: { Authorization: `Bearer ${accessToken}` },
+    signal: upstreamSignal(),
   });
   if (!res.ok) throw new AuthError(`Graph /me failed: HTTP ${res.status}`);
   const body = (await res.json()) as {
