@@ -65,6 +65,19 @@ function headerText(parsed: ParsedMail, name: string): string | null {
   return typeof asAny.text === 'string' ? asAny.text : String(v);
 }
 
+export function isIndexed(accountId: string, providerMessageId: string): boolean {
+  return !!db
+    .select({ id: schema.imapMessages.id })
+    .from(schema.imapMessages)
+    .where(
+      and(
+        eq(schema.imapMessages.accountId, accountId),
+        eq(schema.imapMessages.providerMessageId, providerMessageId),
+      ),
+    )
+    .get();
+}
+
 // Idempotent: returns the new row id, or null if already indexed. Warmup
 // traffic is flagged at index time (decided here unless the caller already
 // knows) so IMAP listings never show it.

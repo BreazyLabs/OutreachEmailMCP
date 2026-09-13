@@ -232,7 +232,11 @@ function bareSubject(subject: string | null | undefined): string {
  * the last two days and has not landed yet. Covers a provider rewriting the
  * Message-ID, since the mail carries no other marker on purpose.
  */
-function matchUnmarkedWarmup(account: Account, parsed: ParsedMail): WarmupMessage | undefined {
+function matchUnmarkedWarmup(
+  account: Account,
+  parsed: ParsedMail,
+  opts: { includeMissing?: boolean } = {},
+): WarmupMessage | undefined {
   const fromAddress = parsed.from?.value?.[0]?.address?.toLowerCase();
   if (!fromAddress) return undefined;
   const sender = db
@@ -251,7 +255,9 @@ function matchUnmarkedWarmup(account: Account, parsed: ParsedMail): WarmupMessag
       and(
         eq(schema.warmupLandings.toAccountId, account.id),
         eq(schema.warmupMessages.fromAccountId, sender.id),
-        sql`${schema.warmupLandings.landed} IS NULL`,
+        opts.includeMissing
+          ? sql`(${schema.warmupLandings.landed} IS NULL OR ${schema.warmupLandings.landed} = 'missing')`
+          : sql`${schema.warmupLandings.landed} IS NULL`,
         sql`${schema.warmupMessages.sentAt} > ${since}`,
       ),
     )
@@ -278,10 +284,32 @@ export function recordLanding(
   return { ...landing, ...patch };
 }
 
-function isDispositionNotification(raw: string): boolean {
+function isDispositionNotification(raw: string, parsed: ParsedMail): boolean {
   const headerEnd = raw.indexOf('\r\n\r\n') >= 0 ? raw.indexOf('\r\n\r\n') : raw.indexOf('\n\n');
   const headers = headerEnd > 0 ? raw.slice(0, headerEnd) : raw.slice(0, 4000);
-  return /report-type=["']?disposition-notification/i.test(headers);
+  if (/report-type=["']?disposition-notification/i.test(headers)) return true;
+  if (/content-type:\s*message\/disposition-notification/i.test(raw)) return true;
+  // Google Workspace read receipts are plain messages titled "Read: <subject>"
+  // with Auto-Submitted set; Outlook's are "Read:" / "Gelezen:" and similar.
+  const subject = parsed.subject ?? '';
+  const auto = String(parsed.headers.get('auto-submitted') ?? '');
+  return /^(read|gelezen|lu|gelesen|leído|letto|not read|niet gelezen):/i.test(subject) && (auto !== '' || /disposition/i.test(raw));
+}
+
+/** A message whose provider id we already attributed to one of our landings
+ *  is ours, whatever its headers say now (a re-emitted delta item, or a
+ *  provider that rewrote the Message-ID after we first saw it). */
+function landingByProviderId(accountId: string, providerMessageId: string): WarmupLanding | undefined {
+  return db
+    .select()
+    .from(schema.warmupLandings)
+    .where(
+      and(
+        eq(schema.warmupLandings.toAccountId, accountId),
+        eq(schema.warmupLandings.providerMessageId, providerMessageId),
+      ),
+    )
+    .get();
 }
 
 /**
@@ -301,6 +329,8 @@ export async function onInboundMessage(
     text: parsed.text ?? null,
   });
   if (!identity.warmup) {
+    const known = landingByProviderId(account.id, providerMessageId);
+    if (known) return { warmup: true, humanOnWarmupThread: false };
     const unmarked = matchUnmarkedWarmup(account, parsed);
     if (unmarked) identity = { warmup: true, via: 'registry', message: unmarked };
   }
@@ -310,7 +340,7 @@ export async function onInboundMessage(
     const parentId = normalizeMessageId(parsed.inReplyTo ?? null);
     const parent = parentId ? lookupRegistry(parentId) : undefined;
     if (!parent) return { warmup: false, humanOnWarmupThread: false };
-    if (isDispositionNotification(raw.toString())) {
+    if (isDispositionNotification(raw.toString(), parsed)) {
       // A partner's real mail client sent a read receipt for our message:
       // system noise on a warmup thread, hide it.
       return { warmup: true, humanOnWarmupThread: false };
@@ -449,12 +479,19 @@ export async function sweepSpam(member: PoolMember, pool: PoolMember[], now = Da
     try {
       const raw = await provider.getMessageRaw(account.id, id);
       const parsed = await simpleParser(raw);
-      const identity = isWarmupMessage({
+      let identity = isWarmupMessage({
         messageId: parsed.messageId ?? null,
         header: headerOf(parsed),
         subject: parsed.subject ?? null,
         text: parsed.text ?? null,
       });
+      if (!identity.warmup) {
+        // Same fallback as the inbox path: a provider may have rewritten
+        // the Message-ID, and a message in Spam is exactly the one we most
+        // need to recognise.
+        const unmarked = matchUnmarkedWarmup(account, parsed, { includeMissing: true });
+        if (unmarked) identity = { warmup: true, via: 'registry', message: unmarked };
+      }
       if (!identity.warmup || !identity.message) continue;
       const message = identity.message;
       const landing = landingFor(message.id, account.id);

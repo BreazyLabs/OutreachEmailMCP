@@ -178,7 +178,7 @@ describe('warmup end to end', () => {
     const raw = fs.readFileSync(job.rawPath!);
     const parsed = await simpleParser(raw);
     expect(parsed.messageId!.toLowerCase()).toBe(`<${message.rfcMessageId}>`);
-    expect(parsed.messageId).toMatch(/@mail\.gmail\.com>$/); // Alice is on Google
+    expect(parsed.messageId).toMatch(/^<CA[A-Za-z0-9_-]{52}@alpha\.test>$/); // Gmail-shaped, at Alice's own domain
     expect([...parsed.headers.keys()].some((k) => k.startsWith('x-'))).toBe(false);
     expect(parsed.text).not.toContain('BNT'); // no visible tag by default
     const bob = db.select().from(schema.accounts).where(eq(schema.accounts.id, B)).get()!;

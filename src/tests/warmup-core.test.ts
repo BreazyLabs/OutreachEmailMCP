@@ -211,7 +211,7 @@ describe('warmup identity and task queue (db-backed)', () => {
     const tag = identity.ensureOrgTag(orgId);
     expect(tag).toMatch(/^[A-Z0-9]{7}$/);
     const id = identity.newWarmupMessageId('core@example.com', 'google');
-    expect(id.header).toMatch(/^<CA[A-Za-z0-9_-]{52}@mail\.gmail\.com>$/);
+    expect(id.header).toMatch(/^<CA[A-Za-z0-9_-]{52}@example\.com>$/);
     expect(identity.newWarmupMessageId('core@example.com', 'microsoft').header).toMatch(/^<[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}@example\.com>$/);
     registerMessage({
       threadId: 't1', turn: 0, kind: 'open', fromAccountId: accountId, toAccountId: 'other',

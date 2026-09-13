@@ -29,9 +29,11 @@ const HEADER_VERSION = 'v1';
 
 // No 0/O/1/I so the tag is unambiguous when read aloud or retyped.
 const tagAlphabet = customAlphabet('23456789ABCDEFGHJKLMNPQRSTUVWXYZ', 7);
-// Message-IDs mimic what each provider's own clients produce, so a warmup
-// message is not recognisable by its id shape. The registry stores the
-// normalised (lowercased) form; lookups normalise too.
+// Message-IDs look like what mail clients produce, so a warmup message is
+// not recognisable by its id shape, but they stay at the sender's own
+// domain: Gmail replaces any client-supplied id that claims @mail.gmail.com
+// with one of its own, which would defeat the registry. The registry stores
+// the normalised (lowercased) form; lookups normalise too.
 const gmailAlphabet = customAlphabet('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-', 52);
 const hexAlphabet = customAlphabet('0123456789abcdef', 32);
 
@@ -45,7 +47,7 @@ export function newWarmupMessageId(senderEmail: string, provider: string = 'goog
   let id: string;
   if (provider === 'google') {
     // Gmail and Workspace clients: "CA" + 52 base64url chars @mail.gmail.com
-    id = `CA${gmailAlphabet()}@mail.gmail.com`;
+    id = `CA${gmailAlphabet()}@${domain}`;
   } else {
     // Outlook desktop / many clients: a UUID-shaped local part at the domain
     const h = hexAlphabet();

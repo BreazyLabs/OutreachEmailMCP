@@ -7,7 +7,7 @@ import { logger } from '../logger.js';
 import { dispatchEvent } from './webhooks.js';
 import { classifyInbound } from './classify.js';
 import { findSendJobByMessageId, recordBounce, recordReply } from './correlate.js';
-import { indexMessage } from '../imap/index-store.js';
+import { indexMessage, isIndexed } from '../imap/index-store.js';
 import { logActivity } from '../observability/activity.js';
 import { isMailboxUnavailable } from '../providers/errors.js';
 import { onInboundMessage } from '../warmup/detector.js';
@@ -39,6 +39,12 @@ async function pollAccount(account: Account): Promise<void> {
   // Cap per tick so a burst (or a re-anchor glitch) can't flood webhook targets
   const ids = newMessageIds.slice(0, 50);
   for (const messageId of ids) {
+    // Graph's delta feed re-emits an item whenever it changes (we mark it
+    // read, star it, move it); Gmail's history can repeat an id across a
+    // re-anchor. An id already in the index has been fully handled: fetching
+    // it again would fire webhooks twice and re-run the warmup detector on
+    // mail it has already accounted for.
+    if (isIndexed(account.id, messageId)) continue;
     try {
       const raw = await provider.getMessageRaw(account.id, messageId);
       const parsed = await simpleParser(raw);
