@@ -362,6 +362,8 @@ Notes: the pool is **instance-wide by default** — in SaaS mode that means mail
 
 ## Running more than one instance (zero-downtime deploys)
 
+On the Breazy instance a push to `main` deploys: a GitHub webhook calls the Dokploy application's deploy URL, which builds the image and rolls the two replicas one at a time.
+
 Several instances can share one data volume. Every instance serves SMTP, IMAP and HTTP; only the holder of a heartbeat lease (one SQLite row, 30 s TTL) runs the pollers, the send and webhook workers and the warmup engine, and a peer takes the lease over when the holder shuts down or dies. On shutdown an instance drains: it stops accepting, lets in-flight sessions finish for up to 8 s, releases the lease, and answers `503` on `/healthz` meanwhile so a router stops sending it work.
 
 To deploy without downtime, put the mail ports behind a TCP proxy that stays up (Traefik TCP entrypoints with TLS terminated there and a real certificate; set `SMTP_ALLOW_INSECURE_AUTH=true`, `IMAP_ALLOW_INSECURE_AUTH=true`, `SMTPS_PORT=0`, `IMAPS_PORT=0` on the app, which is then only reachable on the container network), run two replicas with start-first rolling updates and a health check, and keep migrations additive so both versions can run side by side for a minute. The bundled `docker-compose.yml` is the single-instance, self-hosted layout with the ports published directly.
