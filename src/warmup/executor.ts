@@ -578,6 +578,8 @@ export async function executorTick(): Promise<void> {
 }
 
 export function startWarmupExecutor(): () => void {
+  stopped = false;
+  running = false;
   reapStuckTasks(0);
   const interval = setInterval(() => void executorTick(), 20_000);
   interval.unref();

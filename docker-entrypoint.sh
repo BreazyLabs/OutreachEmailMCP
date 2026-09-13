@@ -9,6 +9,15 @@ set -euo pipefail
 : "${BREAZYENV_PROJECT:=outreachemailmcp-app}"
 export BREAZYENV_URL
 
+# env.internal is tailnet split-DNS, which a container may not resolve. The
+# compose file pins it with extra_hosts; a swarm service cannot, so pin it
+# here when the name does not resolve (BREAZYENV_HOST_IP overrides the tailnet
+# address).
+: "${BREAZYENV_HOST_IP:=100.64.0.3}"
+if ! getent hosts env.internal >/dev/null 2>&1; then
+  echo "$BREAZYENV_HOST_IP env.internal" >> /etc/hosts
+fi
+
 # The CLI is served by the BreazyEnv server itself; retry until reachable so a
 # BreazyEnv outage delays boot instead of starting the app half-configured.
 until curl -fsS --max-time 5 "$BREAZYENV_URL/breazyenv" -o /usr/local/bin/breazyenv; do

@@ -144,7 +144,7 @@ describe('warmup end to end', () => {
     // lotteries certain so the assertions below are deterministic.
     db.update(schema.warmupAccounts).set({ todayTarget: 10 }).where(eq(schema.warmupAccounts.accountId, A)).run();
     db.update(schema.warmupAccounts)
-      .set({ settingsJson: JSON.stringify({ readRate: 100, readReceiptSendRate: 100, replyRate: 100, starRate: 100 }) })
+      .set({ settingsJson: JSON.stringify({ readRate: 100, readReceiptSendRate: 100, replyRate: 100, starRate: 100, cleanupRate: 100 }) })
       .where(eq(schema.warmupAccounts.accountId, B))
       .run();
     const task = enqueueTask({

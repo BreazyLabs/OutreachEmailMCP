@@ -10,11 +10,30 @@ import { ImapSession } from './session.js';
 // connect (993-style). A client that assumes implicit TLS against a STARTTLS
 // port fails with "wrong version number" as it reads the plaintext greeting as
 // a TLS record, so offering only one of them locks out half the tools.
+// Open client sockets, so a graceful shutdown can wait for them and then
+// cut the stragglers.
+const openSockets = new Set<net.Socket>();
+
+function track(socket: net.Socket): void {
+  openSockets.add(socket);
+  socket.once('close', () => openSockets.delete(socket));
+}
+
+export function imapConnectionCount(): number {
+  return openSockets.size;
+}
+
+export function destroyImapConnections(): void {
+  for (const s of openSockets) s.destroy();
+  openSockets.clear();
+}
+
 export function startImapServer(): net.Server[] {
   const tlsMaterial = loadTlsMaterial();
   const servers: net.Server[] = [];
 
   const starttls = net.createServer((socket) => {
+    track(socket);
     socket.on('error', () => socket.destroy());
     new ImapSession(socket, tlsMaterial);
   });
@@ -31,6 +50,7 @@ export function startImapServer(): net.Server[] {
     const implicit = tls.createServer(
       { key: tlsMaterial.key, cert: tlsMaterial.cert },
       (socket) => {
+        track(socket);
         socket.on('error', () => socket.destroy());
         new ImapSession(socket, tlsMaterial, true);
       },

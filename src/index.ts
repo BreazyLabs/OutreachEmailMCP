@@ -35,6 +35,9 @@ import { startInboundPoller } from './inbound/poller.js';
 import { startWebhookWorker } from './inbound/webhooks.js';
 import { startWarmupEngine } from './warmup/index.js';
 import { registerWarmupRoutes } from './warmup/api.js';
+import { startLeaderLoop, INSTANCE_ID, isLeader, currentHolder } from './cluster/lease.js';
+import { imapConnectionCount, destroyImapConnections } from './imap/server.js';
+import { sqlite } from './db/index.js';
 
 async function main() {
   runMigrations();
@@ -58,7 +61,25 @@ async function main() {
 
   registerApiErrorHandler(app);
 
-  app.get('/healthz', async () => ({ ok: true }));
+  // Deep health: the database must answer, and a draining instance says so
+  // with a 503 so the router stops handing it new connections.
+  let draining = false;
+  app.get('/healthz', async (_req, reply) => {
+    let db = false;
+    try {
+      db = sqlite.prepare('SELECT 1 AS ok').get() !== undefined;
+    } catch {
+      db = false;
+    }
+    const body = {
+      ok: db && !draining,
+      instance: INSTANCE_ID,
+      role: isLeader() ? 'leader' : 'follower',
+      leader: currentHolder()?.holder ?? null,
+      draining,
+    };
+    return reply.code(body.ok ? 200 : 503).send(body);
+  });
 
   registerOauthRoutes(app);
   registerUiRoutes(app);
@@ -98,26 +119,68 @@ async function main() {
     'http server listening',
   );
 
+  // Edge role: every instance accepts mail and HTTP.
   const smtpServers = startSmtpServer();
   const imapServers = startImapServer();
-  const stopSendWorker = startSendWorker();
-  const stopWebhookWorker = startWebhookWorker();
-  const stopPoller = startInboundPoller();
-  startTokenRefreshSweep();
-  startActivityPruner();
-  const stopHealthReporter = startHealthReporter();
-  const stopWarmup = startWarmupEngine();
 
+  // Worker role: only the lease holder polls, sends, warms up and delivers
+  // webhooks. Started and stopped as the lease comes and goes.
+  let stopWorkers: (() => void) | null = null;
+  const stopLeaderLoop = startLeaderLoop({
+    onElected() {
+      const stops = [
+        startSendWorker(),
+        startWebhookWorker(),
+        startInboundPoller(),
+        (() => {
+          const t = startTokenRefreshSweep();
+          return () => clearInterval(t);
+        })(),
+        startActivityPruner(),
+        startHealthReporter(),
+        startWarmupEngine(),
+      ];
+      stopWorkers = () => {
+        for (const stop of stops.reverse()) {
+          try {
+            stop();
+          } catch (err) {
+            logger.warn({ err: String(err) }, 'stopping a worker failed');
+          }
+        }
+        stopWorkers = null;
+      };
+      logger.info('workers started');
+    },
+    onLost() {
+      stopWorkers?.();
+      logger.info('workers stopped');
+    },
+  });
+
+  // Graceful drain: stop accepting, let in-flight sessions finish, hand the
+  // lease to a peer, then exit. Bounded so a stuck session cannot hold a
+  // deploy hostage; the swarm stop grace period is 10 s.
+  let shuttingDown = false;
   const shutdown = async (signal: string) => {
-    logger.info({ signal }, 'shutting down');
-    stopWarmup();
-    stopSendWorker();
-    stopWebhookWorker();
-    stopPoller();
-    stopHealthReporter();
+    if (shuttingDown) return;
+    shuttingDown = true;
+    draining = true;
+    logger.info({ signal, imapConnections: imapConnectionCount() }, 'draining');
+    const deadline = Date.now() + 8_000;
+    stopLeaderLoop(); // stops workers when we lead, and releases the lease
     for (const server of smtpServers) server.close(() => {});
     for (const server of imapServers) server.close(() => {});
-    await app.close();
+    while (imapConnectionCount() > 0 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    destroyImapConnections();
+    try {
+      await Promise.race([app.close(), new Promise((r) => setTimeout(r, 2_000))]);
+    } catch (err) {
+      logger.warn({ err: String(err) }, 'http close failed');
+    }
+    logger.info('shutdown complete');
     process.exit(0);
   };
   process.on('SIGINT', () => void shutdown('SIGINT'));

@@ -42,6 +42,8 @@ function buildSmtpServer(implicitTls: boolean): SMTPServer {
     size: config.SMTP_MAX_SIZE,
     authMethods: ['PLAIN', 'LOGIN'],
     allowInsecureAuth: config.SMTP_ALLOW_INSECURE_AUTH,
+    // On shutdown, wait this long for in-flight sessions before cutting them.
+    closeTimeout: 8_000,
 
     onAuth(auth, _session, callback) {
       const account = auth.password

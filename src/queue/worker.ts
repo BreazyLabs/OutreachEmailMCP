@@ -126,6 +126,8 @@ async function tick(): Promise<void> {
 }
 
 export function startSendWorker(): () => void {
+  stopped = false;
+  running = false;
   reapStuckJobs(0); // anything 'sending' at boot is from a previous crash
   const interval = setInterval(tick, 1000);
   interval.unref();

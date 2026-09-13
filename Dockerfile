@@ -28,10 +28,12 @@ ENV NODE_ENV=production
 ENV DATA_DIR=/data
 VOLUME /data
 
-EXPOSE 3000 2525 1143
+EXPOSE 3000 2525 1143 465 993
 
-# node-based healthcheck: slim has no wget/curl
-HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+# node-based healthcheck: slim has no wget/curl. Probed every 10s so a
+# rolling update sees a fresh replica become healthy quickly; the app answers
+# 503 while draining so the router stops sending it new connections.
+HEALTHCHECK --interval=10s --timeout=5s --retries=3 --start-period=30s \
   CMD node -e "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 COPY docker-entrypoint.sh /docker-entrypoint.sh

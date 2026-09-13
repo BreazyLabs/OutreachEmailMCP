@@ -521,6 +521,17 @@ export const domainHealth = sqliteTable('domain_health', {
   error: text('error'),
 });
 
+// Singleton leases for the background loops. Several app instances may run
+// at once (rolling deploys); exactly one — the holder of the 'workers' lease —
+// polls mailboxes, sends, runs warmup and delivers webhooks. The others only
+// serve SMTP, IMAP and HTTP and take the lease over when it expires.
+export const leases = sqliteTable('leases', {
+  name: text('name').primaryKey(),
+  holder: text('holder').notNull(),
+  acquiredAt: integer('acquired_at').notNull(),
+  expiresAt: integer('expires_at').notNull(),
+});
+
 export type Org = typeof orgs.$inferSelect;
 export type DomainHealth = typeof domainHealth.$inferSelect;
 export type WarmupAccount = typeof warmupAccounts.$inferSelect;
