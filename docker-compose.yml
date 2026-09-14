@@ -13,6 +13,7 @@ services:
     # env.internal is tailnet split-DNS, which containers cannot resolve.
     extra_hosts:
       - "env.internal:100.64.0.3"
+      - "llm.internal:100.64.0.3"
     ports:
       # SMTP + IMAP are raw TCP — these must stay host-published (a reverse
       # proxy like Traefik does not route them by default).
