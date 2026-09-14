@@ -97,8 +97,11 @@ export const warmupSettingsSchema = z.object({
   preferCrossProvider: z.boolean().default(true),
   // --- adaptive throttling ---
   autoThrottle: z.boolean().default(true),
-  slowAtSpamRate: pct(10),
-  pauseAtSpamRate: pct(25),
+  // A fresh pool lands badly at first; the rescues are what earn placement.
+  // For the first weeks, spam is treated as training rather than a fault.
+  protectionAfterDays: z.number().int().min(0).max(60).default(14),
+  slowAtSpamRate: pct(20),
+  pauseAtSpamRate: pct(40),
   cooldownDays: z.number().int().min(1).max(14).default(2),
 });
 
@@ -344,7 +347,8 @@ export const WARMUP_FIELDS: FieldSpec[] = [
   { key: 'preferCrossProvider', label: 'Prefer cross-provider', type: 'bool', group: 'Pairing', help: 'Weight Gmail↔Microsoft pairs up.' },
 
   { key: 'autoThrottle', label: 'Auto-throttle', type: 'bool', group: 'Protection', help: 'Let the engine slow or pause the ramp when placement degrades.' },
-  { key: 'slowAtSpamRate', label: 'Slow at spam rate', type: 'percent', group: 'Protection', min: 0, max: 100, help: '7-day spam+missing rate that holds the ramp and halves volume.' },
+  { key: 'protectionAfterDays', label: 'Protection starts after (days)', type: 'int', group: 'Protection', min: 0, max: 60, help: 'For this many days after warmup starts, spam placements are rescued but never throttle or pause the mailbox: a new pool needs those rescues to earn placement.' },
+  { key: 'slowAtSpamRate', label: 'Slow at spam rate', type: 'percent', group: 'Protection', min: 0, max: 100, help: '7-day spam+missing rate that holds the ramp and halves volume (after the protection delay).' },
   { key: 'pauseAtSpamRate', label: 'Pause at spam rate', type: 'percent', group: 'Protection', min: 0, max: 100, help: 'Rate that auto-pauses the mailbox.' },
   { key: 'cooldownDays', label: 'Cooldown (days)', type: 'int', group: 'Protection', min: 1, max: 14, help: 'How long an auto-pause lasts.' },
 ];

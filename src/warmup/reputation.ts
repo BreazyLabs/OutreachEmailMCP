@@ -46,6 +46,27 @@ export function applyReputation(member: PoolMember, now = Date.now(), trigger: '
       settings.cooldownDays,
     );
   }
+  // Young mailbox: spam placements are expected and the rescues are the
+  // cure, so neither throttle nor pause — and undo a throttle left from a
+  // stricter setting, so the ramp keeps moving.
+  const ageMs = now - (warm.startedAt ?? now);
+  if (ageMs < settings.protectionAfterDays * 24 * 3600_000) {
+    if (warm.throttlePercent < 100) {
+      db.update(schema.warmupAccounts)
+        .set({ throttlePercent: 100, cleanDays: 0, updatedAt: now })
+        .where(eq(schema.warmupAccounts.accountId, account.id))
+        .run();
+      logActivity({
+        category: 'warmup',
+        action: 'throttle-lifted',
+        status: 'ok',
+        accountId: account.id,
+        detail: `within the ${settings.protectionAfterDays}-day protection delay; full volume restored`,
+      });
+      return getWarmupAccount(account.id)!;
+    }
+    return null;
+  }
   if (rate === null || samples < MIN_SAMPLES) return null;
 
   if (rate >= settings.pauseAtSpamRate) {
