@@ -36,4 +36,31 @@ printf '%s' "${BREAZYENV_TOKEN:?Set BREAZYENV_TOKEN (project token from BreazyEn
   > "/root/.breazyenv/tokens/$BREAZYENV_PROJECT"
 chmod 600 "/root/.breazyenv/tokens/$BREAZYENV_PROJECT"
 
-exec breazyenv run -p "$BREAZYENV_PROJECT" -- "$@"
+# breazyenv run supervises the app and exits with its status. A non-zero exit
+# within the first seconds is a boot problem (the env server hiccuped, a
+# temp-file race in the CLI), not an app crash: retry a few times before
+# giving the task up, so a rolling update is not rolled back over a blip.
+# SIGTERM from Docker lands on this shell (PID 1) and is forwarded.
+child=0
+stopping=0
+forward() { stopping=1; kill -TERM "$child" 2>/dev/null || true; }
+attempt=0
+while :; do
+  attempt=$((attempt + 1))
+  started=$(date +%s)
+  breazyenv run -p "$BREAZYENV_PROJECT" -- "$@" &
+  child=$!
+  trap forward TERM INT
+  rc=0
+  wait "$child" || rc=$?
+  # wait returns early when the trap fires; collect the real exit status.
+  if [ "$rc" -gt 128 ] && [ "$stopping" -eq 1 ]; then wait "$child" || rc=$?; fi
+  trap - TERM INT
+  ran=$(( $(date +%s) - started ))
+  if [ "$stopping" -eq 0 ] && [ "$rc" -ne 0 ] && [ "$ran" -lt 20 ] && [ "$attempt" -lt 5 ]; then
+    echo "breazyenv: exited $rc after ${ran}s; retrying ($attempt/5)" >&2
+    sleep 2
+    continue
+  fi
+  exit "$rc"
+done
