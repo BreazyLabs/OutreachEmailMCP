@@ -18,12 +18,14 @@ import { llmStatus } from './content/llm.js';
 import { domainHealthFor, domainOfEmail, dnsVerdict, issuesOf } from './dns-health.js';
 import type { Persona } from './content/persona.js';
 import type { Account, Org, WarmupAccount } from '../db/schema.js';
+import { parseTags } from '../accounts/tags.js';
 
 export interface AccountWarmupSummary {
   accountId: string;
   email: string;
   provider: string;
   accountStatus: string;
+  tags: string[];
   enabled: boolean;
   state: WarmupAccount['state'];
   rampDay: number;
@@ -82,6 +84,7 @@ export function summarizeAccount(account: Account, org: Org, warm: WarmupAccount
     email: account.email,
     provider: account.provider,
     accountStatus: account.status,
+    tags: parseTags(account.tagsJson),
     dns: {
       verdict: dnsVerdict(dnsRow),
       issues: issuesOf(dnsRow),
@@ -183,9 +186,14 @@ export function orgDailySeries(orgId: string, days = 30): DailyPoint[] {
     .where(eq(schema.accounts.orgId, orgId))
     .all()
     .map((r) => r.id);
+  return sumSeries(ids.map((id) => dailySeries(id, days)), days);
+}
+
+/** Add up several per-mailbox series into one, by date. */
+export function sumSeries(all: DailyPoint[][], days = 30): DailyPoint[] {
   const byDate = new Map<string, DailyPoint>();
-  for (const id of ids) {
-    for (const p of dailySeries(id, days)) {
+  for (const one of all) {
+    for (const p of one) {
       const cur = byDate.get(p.date);
       if (!cur) byDate.set(p.date, { ...p });
       else {
@@ -206,6 +214,8 @@ export interface OrgWarmupOverview {
   accounts: AccountWarmupSummary[];
   /** 14-day per-mailbox series for row sparklines. */
   sparks: Record<string, DailyPoint[]>;
+  /** 30-day per-mailbox series (every mailbox with history), for charts of any selection. */
+  series: Record<string, DailyPoint[]>;
   daily: DailyPoint[];
   pool: PoolInfo;
   content: { mix: ReturnType<typeof contentSourceMix>; llm: ReturnType<typeof llmStatus> };
@@ -251,12 +261,18 @@ export function orgWarmupOverview(org: Org): OrgWarmupOverview {
   const warmById = new Map(warmRows.map((w) => [w.accountId, w]));
   const summaries = accounts.map((a) => summarizeAccount(a, org, warmById.get(a.id)));
   const defaults = resolveWarmupSettings(org, null);
+  const series: Record<string, DailyPoint[]> = {};
   const sparks: Record<string, DailyPoint[]> = {};
-  for (const a of accounts) sparks[a.id] = warmById.get(a.id)?.enabled ? dailySeries(a.id, 14) : [];
+  for (const a of accounts) {
+    const s = dailySeries(a.id, 30);
+    if (s.length) series[a.id] = s;
+    sparks[a.id] = warmById.get(a.id)?.enabled ? s.slice(-14) : [];
+  }
   return {
     accounts: summaries,
     sparks,
-    daily: orgDailySeries(org.id, 30),
+    series,
+    daily: sumSeries(Object.values(series), 30),
     pool: poolInfo(org),
     content: { mix: contentSourceMix(7), llm: llmStatus() },
     org: {

@@ -1,0 +1,628 @@
+<%- include('_header') %>
+<%
+  const fmtPct = (v) => v === null || v === undefined ? '—' : v.toFixed(0) + '%';
+  const stateLabel = (s) => ({ off: 'off', ramping: 'ramping', steady: 'steady', paused: 'paused', auto_paused: 'auto-paused', blocked_upstream: 'blocked' })[s] || s;
+  const t = overview.totals;
+  const decided7d = t.inbox7d + t.spam7d + t.missing7d;
+  const inboxRate7d = decided7d ? (t.inbox7d / decided7d) * 100 : null;
+  const spamRate7d = decided7d ? ((t.spam7d + t.missing7d) / decided7d) * 100 : null;
+  const enabledIds = overview.accounts.filter((a) => a.enabled).map((a) => a.accountId);
+  const offIds = overview.accounts.filter((a) => !a.enabled && a.accountStatus === 'active').map((a) => a.accountId);
+  const dnsBad = overview.accounts.filter((a) => a.dns.verdict === 'bad');
+  const dnsUnchecked = overview.accounts.filter((a) => a.dns.verdict === 'unchecked');
+  const needsAttention = overview.accounts.filter((a) => a.accountStatus !== 'active');
+%>
+<style>
+  .pagehead { display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap; }
+  .pagehead h1 { margin:0.4rem 0; }
+  .lead { max-width:78ch; margin:0.2rem 0 1rem; }
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:0.7rem; }
+  .kpi { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:0.65rem 0.85rem; }
+  .kpi .n { font-size:1.35rem; font-weight:700; font-variant-numeric:tabular-nums; line-height:1.15; }
+  .kpi .n small { font-size:0.8rem; color:var(--muted); font-weight:500; }
+  .kpi .l { color:var(--muted); font-size:0.74rem; text-transform:uppercase; letter-spacing:0.04em; margin-top:0.15rem; }
+  .kpi.bad .n { color:var(--err); } .kpi.good .n { color:var(--ok); } .kpi.warn .n { color:var(--warn); }
+  .badge.ramping { background:color-mix(in srgb, var(--warn) 15%, transparent); color:var(--warn); }
+  .badge.steady { background:color-mix(in srgb, var(--ok) 15%, transparent); color:var(--ok); }
+  .badge.paused, .badge.off { background:color-mix(in srgb, var(--muted) 15%, transparent); color:var(--muted); }
+  .badge.auto_paused, .badge.blocked_upstream { background:color-mix(in srgb, var(--err) 15%, transparent); color:var(--err); }
+  .health { display:inline-flex; align-items:center; gap:0.35rem; font-weight:600; font-size:0.8rem; white-space:nowrap; }
+  .health .dot { width:9px; height:9px; border-radius:50%; display:inline-block; }
+  .health.healthy { color:var(--ok); } .health.healthy .dot { background:var(--ok); }
+  .health.watch { color:var(--warn); } .health.watch .dot { background:var(--warn); }
+  .health.at_risk { color:var(--err); } .health.at_risk .dot { background:var(--err); }
+  .health.no_data { color:var(--muted); } .health.no_data .dot { background:var(--muted); }
+  .health.off { color:var(--muted); } .health.off .dot { background:transparent; border:1px solid var(--muted); }
+  .num { font-variant-numeric:tabular-nums; text-align:right; white-space:nowrap; }
+  .rate { font-weight:600; } .rate.good { color:var(--ok); } .rate.warn { color:var(--warn); } .rate.bad { color:var(--err); }
+  .toolbar { display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap; margin:0 0 0.6rem; }
+  .toolbar input[type=search] { min-width:220px; }
+  .toolbar .sel { display:flex; gap:0.3rem; align-items:center; margin-left:auto; }
+  .toolbar .sel button { padding:0.3rem 0.6rem; font-size:0.78rem; }
+  .bulkbar { position:sticky; top:0; z-index:5; display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap; padding:0.55rem 0.7rem; border:1px solid var(--line); border-radius:8px; background:var(--card); margin:0.5rem 0; box-shadow:0 2px 10px rgba(0,0,0,0.05); }
+  .bulkbar.has { border-color:color-mix(in srgb, var(--accent) 45%, var(--line)); background:color-mix(in srgb, var(--accent) 6%, var(--card)); }
+  .bulkbar .count { font-weight:700; min-width:9ch; }
+  .bulkbar button { padding:0.35rem 0.75rem; font-size:0.8rem; }
+  .bulkbar .tabs { margin-left:auto; display:flex; gap:0.3rem; }
+  .bulkbar .tabs button.on { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .selpanel { border:1px solid color-mix(in srgb, var(--accent) 35%, var(--line)); border-radius:10px; padding:0.9rem 1rem; margin:0.4rem 0 0.8rem; background:color-mix(in srgb, var(--accent) 3%, var(--card)); }
+  .selpanel[hidden] { display:none; }
+  .selpanel h3 { margin:0 0 0.5rem; font-size:0.95rem; }
+  .selpanel .who { color:var(--muted); font-size:0.8rem; margin-bottom:0.6rem; }
+  .minikpis { display:flex; gap:1.2rem; flex-wrap:wrap; font-size:0.9rem; margin-bottom:0.6rem; }
+  .minikpis b { font-variant-numeric:tabular-nums; }
+  .chips { display:flex; gap:0.4rem; flex-wrap:wrap; align-items:center; }
+  .chip { display:inline-flex; align-items:center; gap:0.3rem; padding:0.15rem 0.6rem; border-radius:99px; font-size:0.78rem; background:color-mix(in srgb, var(--accent) 12%, transparent); color:var(--accent); border:1px solid transparent; cursor:pointer; user-select:none; }
+  .chip input { margin:0; }
+  .chip:has(input:checked) { background:color-mix(in srgb, var(--err) 12%, transparent); color:var(--err); text-decoration:line-through; }
+  .chip small { color:var(--muted); font-weight:500; }
+  .tag { display:inline-block; padding:0 0.45rem; border-radius:99px; font-size:0.7rem; background:color-mix(in srgb, var(--accent) 12%, transparent); color:var(--accent); cursor:pointer; margin-left:0.2rem; vertical-align:1px; }
+  .tag:hover { background:color-mix(in srgb, var(--accent) 22%, transparent); }
+  details.panel summary { cursor:pointer; font-weight:600; font-size:0.9rem; }
+  details.section { margin:1rem 0; }
+  details.section > summary { cursor:pointer; font-weight:600; font-size:1.05rem; padding:0.4rem 0; }
+  details.section > summary .muted { font-weight:400; }
+  th.sortable { cursor:pointer; user-select:none; } th.sortable:hover { color:var(--fg); }
+  th.sortable[data-dir="asc"]::after { content:" ▲"; font-size:0.65rem; } th.sortable[data-dir="desc"]::after { content:" ▼"; font-size:0.65rem; }
+  tr.dim td { opacity:0.55; } tr.hidden { display:none; }
+  tr.picked td { background:color-mix(in srgb, var(--accent) 6%, transparent); }
+  .tagbox { font-family: ui-monospace, monospace; letter-spacing:0.08em; }
+  .legend { display:flex; gap:1rem; flex-wrap:wrap; font-size:0.78rem; color:var(--muted); margin:0.4rem 0 0; }
+  .legend span::before { content:""; display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:0.35rem; vertical-align:-1px; background:var(--c); }
+  .quickstart { display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap; }
+  .spark { display:block; }
+  .reasons { color:var(--muted); font-size:0.74rem; max-width:32ch; line-height:1.3; }
+  .mini { font-size:0.75rem; color:var(--muted); }
+  #sel-table td, #sel-table th { padding:0.35rem 0.5rem; }
+</style>
+
+<div class="pagehead">
+  <h1>Mailboxes</h1>
+  <div class="row">
+    <% if (googleEnabled) { %><a class="btn" href="/auth/google/start">+ Connect Gmail</a><% } %>
+    <% if (microsoftEnabled) { %><a class="btn" href="/auth/microsoft/start">+ Connect Microsoft</a><% } %>
+    <% if (!googleEnabled && !microsoftEnabled) { %><span class="muted">No OAuth providers configured — set GOOGLE_CLIENT_ID/SECRET or MICROSOFT_CLIENT_ID/SECRET</span><% } %>
+    <% if (connectLinks.hub || overview.accounts.length > 0) { %><a class="btn secondary" style="color:inherit" href="#onboarding" onclick="document.getElementById('onboarding').open = true">Onboarding link &amp; exports</a><% } %>
+  </div>
+</div>
+<p class="muted lead">
+  Every connected mailbox, with its warmup health. Enabled mailboxes write to each other in short, human-looking threads and every message is tracked to where it landed; spam placements are rescued, and none of it shows up in your API, IMAP, webhooks or stats. Select mailboxes to see their combined chart and change them together.
+</p>
+
+<% if (!engineEnabled) { %>
+<div class="alert error">The warmup engine is switched off on this instance (<code>WARMUP_ENABLED=false</code>). Settings can be edited but nothing will run.</div>
+<% } %>
+
+<% if (offIds.length > 0 && enabledIds.length === 0) { %>
+<div class="card quickstart">
+  <div>
+    <strong>Ready to start.</strong>
+    <div class="muted" style="margin-top:0.2rem; max-width:60ch">The defaults are a complete, sensible configuration: <%= orgResolved.startVolume %> a day rising by <%= orgResolved.increasePerDay %> to <%= orgResolved.dailyLimit %>, <%= orgResolved.sendWindowStart %>–<%= orgResolved.sendWindowEnd %> <%= orgResolved.timezone %>, <%= orgResolved.replyRate %>% replies, spam rescue on. One click enables all <%= offIds.length %> active mailboxes.</div>
+  </div>
+  <form method="post" action="/ui/warmup/bulk">
+    <input type="hidden" name="_csrf" value="<%= csrf %>">
+    <input type="hidden" name="action" value="enable">
+    <% for (const id of offIds) { %><input type="hidden" name="accountIds" value="<%= id %>"><% } %>
+    <button type="submit">Start warming up all <%= offIds.length %> mailboxes</button>
+  </form>
+</div>
+<% } %>
+
+<% if (connectLinks.hub || overview.accounts.length > 0) { %>
+<details class="card" id="onboarding" style="padding-top:0.7rem; padding-bottom:0.7rem">
+  <summary style="cursor:pointer; font-weight:600">Onboarding link &amp; sequencer exports</summary>
+  <% if (connectLinks.hub) { %>
+  <div style="margin-top:0.8rem">
+    <strong>Onboarding link</strong>
+    <p class="muted" style="margin:0.25rem 0 0; max-width:62ch">Hand this one URL to whoever adds mailboxes (a person, a VA, or an automation). It never expires and is <strong>not used up</strong> — opening it again adds the next mailbox. No admin login needed.</p>
+    <div class="row" style="margin-top:0.5rem">
+      <input class="mono" readonly value="<%= connectLinks.hub %>" onclick="this.select()" style="flex:1">
+      <a class="btn secondary" style="color:inherit" href="<%= connectLinks.hub %>" target="_blank" rel="noopener">Open</a>
+      <form method="post" action="/ui/connect-links/revoke" onsubmit="return confirm('Revoke every connect link issued so far? Anyone still holding an old link will have to be given the new one.')">
+        <input type="hidden" name="_csrf" value="<%= csrf %>">
+        <button class="secondary" type="submit">Revoke &amp; regenerate</button>
+      </form>
+    </div>
+    <details style="margin-top:0.6rem">
+      <summary class="muted" style="cursor:pointer">Provider-specific links (skip the chooser page)</summary>
+      <% if (connectLinks.google) { %>
+      <div class="row" style="margin:0.5rem 0 0.4rem"><span style="min-width:75px">Gmail</span><input class="mono" readonly value="<%= connectLinks.google %>" onclick="this.select()" style="flex:1"></div>
+      <% } %>
+      <% if (connectLinks.microsoft) { %>
+      <div class="row"><span style="min-width:75px">Microsoft</span><input class="mono" readonly value="<%= connectLinks.microsoft %>" onclick="this.select()" style="flex:1"></div>
+      <% } %>
+      <p class="muted" style="margin:0.5rem 0 0">Also reusable, but they expire (default 7 days, <code>CONNECT_LINK_TTL_HOURS</code>) and go straight to one provider.</p>
+    </details>
+  </div>
+  <% } %>
+  <% if (overview.accounts.length > 0) { %>
+  <div style="margin-top:1rem">
+    <strong>Connect to your sequencer</strong>
+    <p class="muted" style="margin:0.25rem 0 0.5rem">A bulk-import CSV with each mailbox's proxy SMTP + IMAP credentials, pre-formatted for your tool:</p>
+    <div class="row">
+      <% for (const [format, label] of Object.entries(sequencers)) { %>
+        <a class="btn <%= format === 'generic' ? 'secondary' : '' %>" style="<%= format === 'generic' ? 'color:inherit' : '' %>" href="/ui/accounts.csv?format=<%= format %>">⬇ <%= label %></a>
+      <% } %>
+    </div>
+  </div>
+  <% } %>
+</details>
+<% } %>
+
+<% if (overview.accounts.length > 0) { %>
+<h2 style="margin-top:1.2rem">Health</h2>
+<div class="kpis">
+  <div class="kpi <%= orgHealth.label === 'healthy' ? 'good' : orgHealth.label === 'watch' ? 'warn' : orgHealth.label === 'at_risk' ? 'bad' : '' %>">
+    <div class="n"><%= orgHealth.score === null ? '—' : orgHealth.score %><% if (orgHealth.score !== null) { %><small>/100</small><% } %></div>
+    <div class="l">workspace health · <%= healthLabels[orgHealth.label] %></div>
+    <div class="mini"><%= orgHealth.counts.healthy %> healthy · <%= orgHealth.counts.watch %> watch · <%= orgHealth.counts.at_risk %> at risk · <%= orgHealth.counts.no_data %> warming up</div>
+  </div>
+  <div class="kpi <%= inboxRate7d === null ? '' : inboxRate7d >= 90 ? 'good' : inboxRate7d >= 75 ? 'warn' : 'bad' %>"><div class="n"><%= fmtPct(inboxRate7d) %></div><div class="l">inbox rate · 7 days</div><div class="mini"><%= t.inbox7d %> of <%= decided7d %> placed</div></div>
+  <div class="kpi <%= spamRate7d === null ? '' : spamRate7d <= 2 ? 'good' : spamRate7d <= 10 ? 'warn' : 'bad' %>"><div class="n"><%= fmtPct(spamRate7d) %></div><div class="l">spam + missing · 7 days</div><div class="mini"><%= t.spam7d %> spam · <%= t.missing7d %> missing · <%= t.rescued7d %> rescued</div></div>
+  <div class="kpi"><div class="n"><%= t.sentToday %><small>/<%= t.targetToday %></small></div><div class="l">sent today</div><div class="mini"><%= t.receivedToday %> received today</div></div>
+  <div class="kpi <%= needsAttention.length ? 'bad' : '' %>"><div class="n"><%= t.enabled %><small>/<%= overview.accounts.length %></small></div><div class="l">mailboxes warming</div><div class="mini">pool <%= overview.pool.reachable %><% if (overview.org.poolScope === 'instance' && overview.pool.instance !== overview.pool.reachable) { %> (<%= overview.pool.instance %> on instance)<% } %><% if (needsAttention.length) { %> · <span style="color:var(--err)"><%= needsAttention.length %> need<%= needsAttention.length === 1 ? 's' : '' %> attention</span><% } %></div></div>
+  <div class="kpi"><div class="n"><%= t.replies7d %><small> replies</small></div><div class="l">engagement · 7 days</div><div class="mini"><%= t.forwards7d %> forwards · <%= t.receipts7d %> receipts · <%= t.pending7d %> in transit</div></div>
+</div>
+
+<% if (overview.pool.reachable > 0 && overview.pool.reachable < 5) { %>
+<div class="alert error" style="margin-top:0.8rem">
+  The pool has <%= overview.pool.reachable %> mailbox<%= overview.pool.reachable === 1 ? '' : 'es' %>. Warmup works from two, but five or more looks far more natural. <% if (overview.pool.reachable < overview.pool.minSize) { %><strong>Below the minimum of <%= overview.pool.minSize %>: nothing is being sent.</strong><% } %>
+</div>
+<% } %>
+
+<div class="card">
+  <div class="row" style="justify-content:space-between">
+    <strong>Placement per day · last 30 days · all mailboxes</strong>
+    <span class="muted">hover a bar for the day's numbers · select mailboxes below for their own chart</span>
+  </div>
+  <div style="margin-top:0.5rem"><%- chart %></div>
+  <div class="legend"><% for (const l of chartLegend) { %><span style="--c:<%= l.color %>"><%= l.label %></span><% } %></div>
+</div>
+
+<% if (dnsBad.length) { %>
+<div class="alert error">
+  <strong><%= new Set(dnsBad.map((a) => a.email.split('@')[1])).size %> sending domain(s) fail SPF, DKIM or DMARC.</strong> Warmup cannot fix authentication; fix the DNS first. The DNS column shows S/K/D in capitals when present, lowercase when missing; hover for details.
+</div>
+<% } %>
+<% } %>
+
+<form method="post" action="/ui/warmup/bulk" id="bulk">
+  <input type="hidden" name="_csrf" value="<%= csrf %>">
+  <div class="card">
+    <% if (overview.accounts.length === 0) { %>
+      <p class="muted" style="margin:0">No mailboxes connected yet. Connect one with the buttons above<% if (connectLinks.hub) { %>, or hand out the onboarding link<% } %>.</p>
+    <% } else { %>
+    <div class="toolbar">
+      <input type="search" id="q" placeholder="Search email, domain, tag…" autocomplete="off">
+      <select id="f-state"><option value="">Any state</option><option value="enabled">Enabled</option><option value="off">Off</option><option value="ramping">Ramping</option><option value="steady">Steady</option><option value="paused">Paused</option><option value="auto_paused">Auto-paused</option><option value="blocked_upstream">Blocked</option><option value="attention">Needs attention</option></select>
+      <select id="f-health"><option value="">Any health</option><option value="healthy">Healthy</option><option value="watch">Watch</option><option value="at_risk">At risk</option><option value="no_data">Warming up</option></select>
+      <select id="f-provider"><option value="">Any provider</option><option value="google">Gmail</option><option value="microsoft">Microsoft</option></select>
+      <select id="f-domain"><option value="">Any domain</option><% for (const d of domains) { %><option value="<%= d %>"><%= d %></option><% } %></select>
+      <select id="f-tag"><option value="">Any tag</option><% for (const tg of tags) { %><option value="<%= tg.tag.toLowerCase() %>"><%= tg.tag %> (<%= tg.count %>)</option><% } %><option value="-">Untagged</option></select>
+      <div class="sel">
+        <span class="muted" id="visible-count"></span>
+        <button type="button" class="secondary" data-sel="all">Select shown</button>
+        <button type="button" class="secondary" data-sel="none">None</button>
+        <button type="button" class="secondary" data-sel="invert">Invert</button>
+      </div>
+    </div>
+    <div class="row" style="justify-content:space-between; margin:0 0 0.2rem">
+      <span class="muted">DNS: <b>S</b>PF · D<b>K</b>IM · <b>D</b>MARC, capital = present, checked every 6 hours.<%= dnsUnchecked.length ? ` ${dnsUnchecked.length} not checked yet.` : '' %> Click a tag to filter by it.</span>
+      <button type="submit" formaction="/ui/warmup/dns/recheck" class="secondary" style="padding:0.3rem 0.6rem; font-size:0.78rem">Re-check DNS now</button>
+    </div>
+
+    <div class="bulkbar" id="bulkbar">
+      <span class="count"><span id="sel-count">0</span> selected</span>
+      <button type="submit" name="action" value="enable">Enable</button>
+      <button type="submit" name="action" value="pause" class="secondary">Pause</button>
+      <button type="submit" name="action" value="resume" class="secondary">Resume</button>
+      <button type="submit" name="action" value="disable" class="secondary">Disable</button>
+      <div class="tabs">
+        <button type="button" class="secondary" data-panel="details">Details &amp; chart</button>
+        <button type="button" class="secondary" data-panel="tags">Tags</button>
+        <button type="button" class="secondary" data-panel="settings">Settings</button>
+      </div>
+    </div>
+
+    <div class="selpanel" id="selpanel" hidden>
+      <div class="who" id="sel-who"></div>
+      <section id="panel-details" hidden>
+        <div class="minikpis" id="sel-kpis"></div>
+        <div id="sel-chart"></div>
+        <div class="legend"><% for (const l of chartLegend) { %><span style="--c:<%= l.color %>"><%= l.label %></span><% } %></div>
+        <div style="overflow-x:auto; margin-top:0.7rem">
+          <table id="sel-table">
+            <thead><tr><th>Mailbox</th><th>State</th><th class="num">Day</th><th class="num">Today</th><th class="num">Received</th><th class="num">Inbox 7d</th><th class="num">Spam 7d</th><th class="num">Replies</th><th>Last event</th><th>Tags</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+      <section id="panel-tags" hidden>
+        <h3>Tags on the selected mailboxes</h3>
+        <p class="muted" style="margin:0 0 0.5rem">Tags bundle mailboxes per campaign, client or batch: filter by a tag above, then act on the bundle. Tick a tag to remove it from every selected mailbox; type new ones to add them to all of them.</p>
+        <div class="chips" id="sel-tags"></div>
+        <div class="row" style="margin-top:0.7rem">
+          <input name="tags_add" list="taglist" placeholder="Add tags, comma separated (e.g. campaign-a, q4)" style="min-width:320px" autocomplete="off">
+          <datalist id="taglist"><% for (const tg of tags) { %><option value="<%= tg.tag %>"><% } %></datalist>
+          <button type="submit" name="action" value="tags">Save tags</button>
+        </div>
+      </section>
+      <section id="panel-settings" hidden>
+        <h3>Settings for the selected mailboxes</h3>
+        <p class="muted" style="margin:0 0 0.8rem">Sets a per-mailbox override for each field you fill in, on every selected mailbox. Placeholders show the workspace default; the workspace defaults themselves are <a href="#defaults" onclick="document.getElementById('defaults').open = true">further down</a>.</p>
+        <%- include('_warmup-fields', { fields, values: {}, baseline: orgResolved, mode: 'bulk', sources: null }) %>
+        <div class="row" style="margin-top:0.8rem">
+          <button type="submit" name="action" value="settings">Apply to selected</button>
+          <button type="submit" name="action" value="clear_overrides" class="secondary" title="Remove every per-mailbox setting so the workspace defaults apply">Clear all overrides on selected</button>
+        </div>
+      </section>
+    </div>
+
+    <div style="overflow-x:auto">
+    <table id="pool">
+      <thead>
+      <tr>
+        <th><input type="checkbox" id="check-visible" title="Select all shown"></th>
+        <th class="sortable" data-key="email">Mailbox</th>
+        <th class="sortable" data-key="health">Health</th>
+        <th class="sortable" data-key="state">State</th>
+        <th class="sortable" data-key="dns" title="SPF, DKIM, DMARC and MX of the sending domain">DNS</th>
+        <th>Trend 14d</th>
+        <th class="sortable num" data-key="inbox">Inbox 7d</th>
+      </tr>
+      </thead>
+      <tbody>
+      <% for (const a of overview.accounts) { const h = health[a.accountId]; const domain = a.email.split('@')[1] || ''; %>
+      <tr class="<%= a.enabled ? '' : 'dim' %>" data-id="<%= a.accountId %>"
+          data-email="<%= a.email %>" data-domain="<%= domain %>" data-provider="<%= a.provider %>" data-state="<%= a.state %>"
+          data-enabled="<%= a.enabled ? '1' : '0' %>" data-healthlabel="<%= h.label %>" data-attention="<%= a.accountStatus !== 'active' ? '1' : '0' %>"
+          data-tags="<%= a.tags.map((x) => x.toLowerCase()).join('|') %>"
+          data-s-email="<%= a.email %>" data-s-health="<%= h.score === null ? -1 : h.score %>" data-s-state="<%= a.state %>"
+          data-s-inbox="<%= a.inboxRate7d === null ? -1 : a.inboxRate7d %>"
+          data-s-dns="<%= { ok: 3, warn: 2, bad: 1, unchecked: 0 }[a.dns.verdict] %>">
+        <td><input type="checkbox" name="accountIds" value="<%= a.accountId %>" class="rowcheck"></td>
+        <td>
+          <a href="/ui/accounts/<%= a.accountId %>"><%= a.email %></a>
+          <span class="muted"><%= a.provider === 'google' ? 'gmail' : 'microsoft' %></span>
+          <% if (a.accountStatus !== 'active') { %><span class="badge <%= a.accountStatus %>" title="<%= a.accountStatus === 'auth_error' ? 'Authentication expired: reconnect' : 'Parked: no mailbox behind this account until it is reconnected' %>"><%= a.accountStatus === 'auth_error' ? 'reconnect' : a.accountStatus %></span><% } %>
+          <% if (a.enabled && !a.canWrite) { %><span class="badge failed" title="Connected without mailbox-write access: cannot mark read, star, or rescue from spam. Reconnect to fix.">no write scope</span><% } %>
+          <% for (const tg of a.tags) { %><span class="tag" data-tag="<%= tg.toLowerCase() %>" title="Filter by this tag"><%= tg %></span><% } %>
+        </td>
+        <td>
+          <span class="health <%= h.label %>" title="<%= h.reasons.join(' · ') %>"><span class="dot"></span><%= h.score === null ? healthLabels[h.label] : h.score %></span>
+          <% if (h.label === 'watch' || h.label === 'at_risk') { %><div class="reasons"><%= h.reasons[0] %></div><% } %>
+        </td>
+        <td>
+          <span class="badge <%= a.state %>"><%= stateLabel(a.state) %></span>
+          <% if (a.throttlePercent < 100 && (a.state === 'ramping' || a.state === 'steady')) { %><span class="muted" title="Volume reduced by the reputation controller"><%= a.throttlePercent %>%</span><% } %>
+          <% if (a.enabled) { %><div class="mini">day <%= a.rampDay %> · <%= a.todaySent %>/<%= a.todayTarget %> today</div><% } %>
+        </td>
+        <td>
+          <% const dv = a.dns.verdict; %>
+          <span class="health <%= dv === 'ok' ? 'healthy' : dv === 'warn' ? 'watch' : dv === 'bad' ? 'at_risk' : 'no_data' %>" title="<%= a.dns.issues.length ? a.dns.issues.join(' · ') : dv === 'unchecked' ? 'Not checked yet' : 'SPF, DKIM, DMARC and MX all present' %>"><span class="dot"></span><%= dv === 'unchecked' ? '…' : (a.dns.spf ? 'S' : 's') + (a.dns.dkim ? 'K' : 'k') + (a.dns.dmarc ? 'D' : 'd') %></span>
+          <% if (dv === 'bad' || dv === 'warn') { %><div class="reasons"><%= a.dns.issues[0] %></div><% } %>
+        </td>
+        <td><%- sparks[a.accountId] || '' %></td>
+        <td class="num"><span class="rate <%= a.inboxRate7d === null ? '' : a.inboxRate7d >= 90 ? 'good' : a.inboxRate7d >= 75 ? 'warn' : 'bad' %>"><%= fmtPct(a.inboxRate7d) %></span>
+          <% const placed = a.placement7d.inbox + a.placement7d.category + a.placement7d.spam + a.placement7d.missing; %>
+          <% if (placed) { %><span class="muted">(<%= a.placement7d.inbox + a.placement7d.category %>/<%= placed %>)</span><% } %></td>
+      </tr>
+      <% } %>
+      </tbody>
+    </table>
+    </div>
+    <% } %>
+  </div>
+</form>
+
+<details class="section" id="defaults">
+  <summary>Workspace defaults <span class="muted">· pool scope, filter tag, visibility, and the defaults every mailbox inherits (<%= Object.keys(orgValues).length %> changed from the instance defaults)</span></summary>
+  <div class="card">
+    <form method="post" action="/ui/warmup/defaults">
+      <input type="hidden" name="_csrf" value="<%= csrf %>">
+      <input type="hidden" name="_settingsForm" value="1">
+      <div class="row" style="gap:1.4rem; align-items:flex-start">
+        <div>
+          <label class="muted" style="display:block; font-size:0.78rem">Pool scope</label>
+          <select name="poolScope">
+            <option value="instance" <%= overview.org.poolScope === 'instance' ? 'selected' : '' %>>Instance: pair with every mailbox on this proxy</option>
+            <option value="org" <%= overview.org.poolScope === 'org' ? 'selected' : '' %>>This workspace only</option>
+          </select>
+        </div>
+        <div>
+          <label class="muted" style="display:block; font-size:0.78rem">Visible filter tag <span title="Off: warmup mail carries no marker at all; the proxy identifies it by its own registry. On: the tag is the last line of every message so tools reading the mailbox directly can filter it — but it is a fingerprint shared by every sender.">ⓘ</span></label>
+          <label style="font-size:0.85rem"><input type="checkbox" name="tagEnabled" value="1" <%= overview.org.tagEnabled ? 'checked' : '' %>> stamp tag into messages</label>
+          <input class="tagbox" name="filterTag" value="<%= overview.org.filterTag || '' %>" placeholder="generated when enabled" maxlength="16" style="width:12ch">
+        </div>
+        <div>
+          <label class="muted" style="display:block; font-size:0.78rem">Visibility</label>
+          <label style="font-size:0.85rem"><input type="checkbox" name="emitWebhooks" value="1" <%= overview.org.emitWebhooks ? 'checked' : '' %>> deliver <code>warmup.*</code> webhook events</label><br>
+          <label style="font-size:0.85rem"><input type="checkbox" name="showInSendLog" value="1" <%= overview.org.showInSendLog ? 'checked' : '' %>> show warmup mail in the send log</label>
+        </div>
+        <div>
+          <label class="muted" style="display:block; font-size:0.78rem">Daily cap</label>
+          <span style="font-size:0.9rem"><%= overview.org.dailyCap %> per mailbox<% if (overview.org.dailyCap < instanceCap) { %> <span class="muted">(plan limit)</span><% } %></span>
+        </div>
+      </div>
+      <div style="margin-top:0.9rem">
+        <%- include('_warmup-fields', { fields, values: orgValues, baseline: instanceDefaults, mode: 'defaults', sources: null }) %>
+      </div>
+      <div class="row" style="margin-top:0.8rem">
+        <button type="submit">Save workspace defaults</button>
+      </div>
+    </form>
+    <form method="post" action="/ui/warmup/defaults/reset" style="margin-top:0.5rem" onsubmit="return confirm('Reset every workspace default to the instance defaults?')">
+      <input type="hidden" name="_csrf" value="<%= csrf %>">
+      <button type="submit" class="secondary">Reset to instance defaults</button>
+    </form>
+  </div>
+</details>
+
+<details class="section" id="content">
+  <% const mix = overview.content.mix; const totalMix = mix.llm + mix.template; %>
+  <summary>Content <span class="muted">· <%= llm.configured ? (llm.breakerOpen ? 'model unreachable, templates in use' : 'written by ' + llmModel) : 'bundled templates only' %><%= totalMix ? ` · ${totalMix} openers this week` : '' %></span></summary>
+  <div class="card">
+    <p class="muted" style="margin-top:0">
+      <% if (llm.configured) { %>
+        Conversations are written by <code><%= llmModel %></code> in batches and kept in a pool; the bundled templates cover gaps.
+        <% if (llm.breakerOpen) { %><span style="color:var(--err)">The API is failing right now; templates are in use until <%= new Date(llm.openUntil).toLocaleString() %>.</span><% } %>
+        Calls today: <%= llm.callsToday %>/<%= llm.budget %>.
+      <% } else { %>
+        No content API configured (<code>WARMUP_LLM_BASE_URL</code> / <code>WARMUP_LLM_API_KEY</code>); the bundled template corpus is used. Any OpenAI-compatible endpoint works.
+      <% } %>
+    </p>
+    <p style="margin:0">
+      Openers this week: <strong><%= totalMix %></strong>
+      <% if (totalMix) { %><span class="muted">· <%= Math.round((mix.llm / totalMix) * 100) %>% generated, <%= Math.round((mix.template / totalMix) * 100) %>% templates</span><% } %>
+    </p>
+  </div>
+</details>
+
+<script type="application/json" id="seldata"><%- selectionData.replace(/</g, '\\u003c') %></script>
+<script>
+(function () {
+  const table = document.getElementById('pool');
+  if (!table) return;
+  const DATA = JSON.parse(document.getElementById('seldata').textContent);
+  const byId = new Map(DATA.accounts.map((a) => [a.id, a]));
+  const rows = Array.from(table.querySelectorAll('tbody tr'));
+  const q = document.getElementById('q');
+  const fState = document.getElementById('f-state');
+  const fHealth = document.getElementById('f-health');
+  const fProvider = document.getElementById('f-provider');
+  const fDomain = document.getElementById('f-domain');
+  const fTag = document.getElementById('f-tag');
+  const selCount = document.getElementById('sel-count');
+  const visibleCount = document.getElementById('visible-count');
+  const checkVisible = document.getElementById('check-visible');
+  const bulkbar = document.getElementById('bulkbar');
+  const panel = document.getElementById('selpanel');
+  const STORE = 'oem.mailboxes.selection';
+  let activePanel = null;
+
+  const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+  const pct = (v) => (v === null || v === undefined ? '—' : v.toFixed(0) + '%');
+  const rateClass = (v) => (v === null ? '' : v >= 90 ? 'good' : v >= 75 ? 'warn' : 'bad');
+  const stateLabel = (s) => ({ off: 'off', ramping: 'ramping', steady: 'steady', paused: 'paused', auto_paused: 'auto-paused', blocked_upstream: 'blocked' })[s] || s;
+
+  function visibleRows() { return rows.filter((r) => !r.classList.contains('hidden')); }
+  function selectedIds() { return rows.filter((r) => r.querySelector('.rowcheck').checked).map((r) => r.dataset.id); }
+
+  function applyFilters() {
+    const text = q.value.trim().toLowerCase();
+    const st = fState.value, he = fHealth.value, pr = fProvider.value, dom = fDomain.value, tg = fTag.value;
+    for (const r of rows) {
+      const d = r.dataset;
+      const tagsOf = d.tags ? d.tags.split('|') : [];
+      let show = true;
+      if (text && !(d.email.toLowerCase().includes(text) || d.domain.includes(text) || tagsOf.some((x) => x.includes(text)) || r.textContent.toLowerCase().includes(text))) show = false;
+      if (st === 'enabled' && d.enabled !== '1') show = false;
+      else if (st === 'attention' && d.attention !== '1') show = false;
+      else if (st && st !== 'enabled' && st !== 'attention' && d.state !== st) show = false;
+      if (he && d.healthlabel !== he) show = false;
+      if (pr && d.provider !== pr) show = false;
+      if (dom && d.domain !== dom) show = false;
+      if (tg === '-' && tagsOf.length) show = false;
+      else if (tg && tg !== '-' && !tagsOf.includes(tg)) show = false;
+      r.classList.toggle('hidden', !show);
+    }
+    updateCounts();
+  }
+
+  function updateCounts() {
+    const ids = selectedIds();
+    selCount.textContent = ids.length;
+    const v = visibleRows().length;
+    visibleCount.textContent = v === rows.length ? rows.length + ' mailboxes' : v + ' of ' + rows.length + ' shown';
+    checkVisible.checked = v > 0 && visibleRows().every((r) => r.querySelector('.rowcheck').checked);
+    rows.forEach((r) => r.classList.toggle('picked', r.querySelector('.rowcheck').checked));
+    bulkbar.classList.toggle('has', ids.length > 0);
+    try { sessionStorage.setItem(STORE, JSON.stringify(ids)); } catch (e) {}
+    renderSelection(ids);
+  }
+
+  // ---- selection panel -------------------------------------------------
+  function renderSelection(ids) {
+    if (ids.length === 0 || !activePanel) { panel.hidden = true; return; }
+    panel.hidden = false;
+    const list = ids.map((id) => byId.get(id)).filter(Boolean);
+    const shown = list.slice(0, 6).map((a) => esc(a.email)).join(', ');
+    document.getElementById('sel-who').innerHTML = '<b>' + list.length + ' selected</b> · ' + shown + (list.length > 6 ? ' and ' + (list.length - 6) + ' more' : '');
+    for (const name of ['details', 'tags', 'settings']) document.getElementById('panel-' + name).hidden = name !== activePanel;
+    if (activePanel === 'details') renderDetails(list);
+    if (activePanel === 'tags') renderTags(list);
+  }
+
+  function renderDetails(list) {
+    const sum = (f) => list.reduce((n, a) => n + f(a), 0);
+    const inbox = sum((a) => a.placement7d.inbox + a.placement7d.category);
+    const spam = sum((a) => a.placement7d.spam), missing = sum((a) => a.placement7d.missing);
+    const decided = inbox + spam + missing;
+    const rate = decided ? (inbox / decided) * 100 : null;
+    document.getElementById('sel-kpis').innerHTML =
+      '<span>warming <b>' + list.filter((a) => a.enabled).length + '</b>/' + list.length + '</span>' +
+      '<span>today <b>' + sum((a) => a.todaySent) + '</b><span class="muted">/' + sum((a) => a.todayTarget) + '</span> sent, <b>' + sum((a) => a.todayReceived) + '</b> received</span>' +
+      '<span>7 days: inbox rate <b class="rate ' + rateClass(rate) + '">' + pct(rate) + '</b> · inbox <b>' + inbox + '</b> · spam <b' + (spam ? ' style="color:var(--err)"' : '') + '>' + spam + '</b> · missing <b>' + missing + '</b> · rescued <b>' + sum((a) => a.rescued7d) + '</b></span>' +
+      '<span>replies <b>' + sum((a) => a.replies7d) + '</b> · forwards <b>' + sum((a) => a.forwards7d) + '</b> · receipts <b>' + sum((a) => a.receipts7d) + '</b> · queued actions <b>' + sum((a) => a.pendingTasks) + '</b></span>';
+    document.getElementById('sel-chart').innerHTML = chartSvg(sumSeries(list.map((a) => DATA.series[a.id] || [])));
+    const tbody = document.querySelector('#sel-table tbody');
+    tbody.innerHTML = list.map((a) => {
+      const p = a.placement7d, placed = p.inbox + p.category + p.spam + p.missing;
+      const ev = a.lastEvent ? '<span title="' + esc(new Date(a.lastEvent.at).toLocaleString()) + '">' + esc(a.lastEvent.action) + '</span>' + (a.lastEvent.detail ? ' · ' + esc(a.lastEvent.detail.slice(0, 50)) : '') : '—';
+      return '<tr>' +
+        '<td><a href="/ui/accounts/' + a.id + '">' + esc(a.email) + '</a>' + (a.status !== 'active' ? ' <span class="badge ' + a.status + '">' + esc(a.status) + '</span>' : '') + '</td>' +
+        '<td><span class="badge ' + a.state + '">' + stateLabel(a.state) + '</span>' + (a.throttlePercent < 100 && (a.state === 'ramping' || a.state === 'steady') ? ' <span class="muted">' + a.throttlePercent + '%</span>' : '') + (a.pauseReason && (a.state === 'auto_paused' || a.state === 'paused') ? '<div class="reasons">' + esc(a.pauseReason) + '</div>' : '') + '</td>' +
+        '<td class="num">' + (a.enabled ? a.rampDay : '—') + '</td>' +
+        '<td class="num">' + a.todaySent + '<span class="muted">/' + a.todayTarget + '</span></td>' +
+        '<td class="num">' + a.todayReceived + '<span class="muted">/' + a.receiveLimit + '</span></td>' +
+        '<td class="num"><span class="rate ' + rateClass(a.inboxRate7d) + '">' + pct(a.inboxRate7d) + '</span>' + (placed ? ' <span class="muted">(' + (p.inbox + p.category) + '/' + placed + ')</span>' : '') + '</td>' +
+        '<td class="num">' + p.spam + (p.missing ? ' <span class="muted" title="missing">+' + p.missing + 'm</span>' : '') + (a.rescued7d ? ' <span class="muted" title="rescued">↩' + a.rescued7d + '</span>' : '') + '</td>' +
+        '<td class="num">' + a.replies7d + (a.forwards7d ? ' <span class="muted" title="forwards">+' + a.forwards7d + 'f</span>' : '') + '</td>' +
+        '<td class="muted" style="max-width:26ch">' + ev + '</td>' +
+        '<td>' + a.tags.map((t) => '<span class="tag" data-tag="' + esc(t.toLowerCase()) + '">' + esc(t) + '</span>').join('') + '</td>' +
+      '</tr>';
+    }).join('');
+  }
+
+  function renderTags(list) {
+    const counts = new Map();
+    for (const a of list) for (const t of a.tags) {
+      const k = t.toLowerCase();
+      const c = counts.get(k) || { tag: t, n: 0 };
+      c.n++; counts.set(k, c);
+    }
+    const box = document.getElementById('sel-tags');
+    if (counts.size === 0) { box.innerHTML = '<span class="muted">No tags on the selected mailboxes yet.</span>'; return; }
+    box.innerHTML = [...counts.values()].sort((a, b) => a.tag.localeCompare(b.tag)).map((c) =>
+      '<label class="chip" title="Tick to remove from the selected mailboxes"><input type="checkbox" name="tags_remove" value="' + esc(c.tag) + '"> ' + esc(c.tag) + ' <small>' + c.n + '/' + list.length + '</small></label>'
+    ).join('');
+  }
+
+  // ---- chart (same drawing as the server-side one) -----------------------
+  function padDays(points, days) {
+    const byDate = new Map(points.map((p) => [p.date, p]));
+    const out = [], today = new Date();
+    for (let i = days - 1; i >= 0; i--) {
+      const d = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - i));
+      const key = d.toISOString().slice(0, 10);
+      out.push(byDate.get(key) || { date: key, sent: 0, inbox: 0, spam: 0, category: 0, missing: 0, received: 0, replies: 0 });
+    }
+    return out;
+  }
+  function sumSeries(all) {
+    const byDate = new Map();
+    for (const one of all) for (const p of one) {
+      const cur = byDate.get(p.date);
+      if (!cur) byDate.set(p.date, Object.assign({}, p));
+      else for (const k of ['sent', 'inbox', 'spam', 'category', 'missing', 'received', 'replies']) cur[k] += p[k];
+    }
+    return [...byDate.values()];
+  }
+  function niceCeil(v) {
+    if (v <= 5) return 5;
+    const mag = Math.pow(10, Math.floor(Math.log10(v)));
+    const n = v / mag;
+    return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * mag;
+  }
+  function chartSvg(points, days = 30, width = 1200, height = 230) {
+    const series = padDays(points, days);
+    const pad = { l: 40, r: 10, t: 10, b: 26 };
+    const plotW = width - pad.l - pad.r, plotH = height - pad.t - pad.b;
+    const max = Math.max(1, ...series.map((d) => Math.max(d.sent, d.inbox + d.category + d.spam + d.missing)));
+    const nice = niceCeil(max);
+    const gap = 4, bw = Math.max(2, (plotW - gap * (days - 1)) / days);
+    const y = (v) => pad.t + plotH - (v / nice) * plotH;
+    let out = '';
+    for (let i = 0; i <= 4; i++) {
+      const v = (nice / 4) * i, yy = y(v);
+      out += '<line x1="' + pad.l + '" x2="' + (width - pad.r) + '" y1="' + yy.toFixed(1) + '" y2="' + yy.toFixed(1) + '" stroke="var(--line)" stroke-width="1"/>';
+      out += '<text x="' + (pad.l - 8) + '" y="' + (yy + 4).toFixed(1) + '" text-anchor="end" font-size="12" fill="var(--muted)">' + Math.round(v) + '</text>';
+    }
+    series.forEach((d, i) => {
+      const x = pad.l + i * (bw + gap);
+      const total = d.inbox + d.category + d.spam + d.missing;
+      const stack = [[d.inbox, 'var(--ok)'], [d.category, 'var(--warn)'], [d.spam, 'var(--err)'], [d.missing, 'color-mix(in srgb, var(--err) 55%, var(--bg))'], [Math.max(0, d.sent - total), 'var(--line)']];
+      let top = pad.t + plotH, parts = '';
+      for (const [v, fill] of stack) {
+        if (!v) continue;
+        const h = (v / nice) * plotH; top -= h;
+        parts += '<rect x="' + x.toFixed(1) + '" y="' + top.toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + Math.max(0, h - 1.5).toFixed(1) + '" fill="' + fill + '" rx="2"/>';
+      }
+      const label = d.date + ': sent ' + d.sent + ', inbox ' + d.inbox + ', category ' + d.category + ', spam ' + d.spam + ', missing ' + d.missing + ', received ' + d.received + ', replies ' + d.replies;
+      out += '<g><title>' + esc(label) + '</title><rect x="' + (x - gap / 2).toFixed(1) + '" y="' + pad.t + '" width="' + (bw + gap).toFixed(1) + '" height="' + plotH + '" fill="transparent"/>' + parts + '</g>';
+      if (i % Math.ceil(days / 6) === 0 || i === days - 1) out += '<text x="' + (x + bw / 2).toFixed(1) + '" y="' + (height - 8) + '" text-anchor="middle" font-size="12" fill="var(--muted)">' + d.date.slice(5) + '</text>';
+    });
+    return '<svg viewBox="0 0 ' + width + ' ' + height + '" width="100%" style="display:block; width:100%; height:auto; max-height:' + height + 'px" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Placement per day for the selected mailboxes"><title>Placement per day for the selected mailboxes</title>' + out + '</svg>';
+  }
+
+  // ---- wiring ------------------------------------------------------------
+  [q, fState, fHealth, fProvider, fDomain, fTag].forEach((el) => el.addEventListener('input', applyFilters));
+  document.addEventListener('click', (e) => {
+    const tag = e.target.closest('.tag');
+    if (!tag) return;
+    fTag.value = tag.dataset.tag;
+    if (fTag.value !== tag.dataset.tag) fTag.value = '';
+    applyFilters();
+    table.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  });
+  document.querySelectorAll('[data-sel]').forEach((b) => b.addEventListener('click', () => {
+    const mode = b.dataset.sel;
+    for (const r of visibleRows()) {
+      const c = r.querySelector('.rowcheck');
+      c.checked = mode === 'all' ? true : mode === 'none' ? false : !c.checked;
+    }
+    updateCounts();
+  }));
+  checkVisible.addEventListener('change', () => { for (const r of visibleRows()) r.querySelector('.rowcheck').checked = checkVisible.checked; updateCounts(); });
+  rows.forEach((r) => r.querySelector('.rowcheck').addEventListener('change', updateCounts));
+  document.querySelectorAll('[data-panel]').forEach((b) => b.addEventListener('click', () => {
+    const name = b.dataset.panel;
+    if (selectedIds().length === 0) { alert('Select at least one mailbox first (tick rows, or use "Select shown").'); return; }
+    activePanel = activePanel === name ? null : name;
+    document.querySelectorAll('[data-panel]').forEach((o) => o.classList.toggle('on', o.dataset.panel === activePanel));
+    renderSelection(selectedIds());
+    if (activePanel) panel.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }));
+
+  // Column sort on the data-s-* attributes (numeric where they look numeric).
+  table.querySelectorAll('th.sortable').forEach((th) => th.addEventListener('click', () => {
+    const key = th.dataset.key;
+    const dir = th.dataset.dir === 'asc' ? 'desc' : 'asc';
+    table.querySelectorAll('th.sortable').forEach((o) => o.removeAttribute('data-dir'));
+    th.dataset.dir = dir;
+    const tbody = table.querySelector('tbody');
+    const sorted = rows.slice().sort((a, b) => {
+      const av = a.dataset['s' + key.charAt(0).toUpperCase() + key.slice(1)];
+      const bv = b.dataset['s' + key.charAt(0).toUpperCase() + key.slice(1)];
+      const an = Number(av), bn = Number(bv);
+      const cmp = !isNaN(an) && !isNaN(bn) ? an - bn : String(av).localeCompare(String(bv));
+      return dir === 'asc' ? cmp : -cmp;
+    });
+    sorted.forEach((r) => tbody.appendChild(r));
+  }));
+
+  document.getElementById('bulk').addEventListener('submit', (e) => {
+    const submitter = e.submitter;
+    if (!submitter || submitter.name !== 'action') return;
+    const n = selectedIds().length;
+    if (n === 0) { e.preventDefault(); alert('Select at least one mailbox first (tick rows, or use "Select shown").'); return; }
+    if (submitter.value === 'disable' && !confirm('Disable warmup for ' + n + ' mailbox(es)? Pending conversations are dropped; history is kept.')) e.preventDefault();
+    if (submitter.value === 'clear_overrides' && !confirm('Clear every per-mailbox setting on ' + n + ' mailbox(es)? The workspace defaults apply afterwards.')) e.preventDefault();
+  });
+
+  // Keep the selection across the reload that follows a bulk action.
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(STORE) || '[]');
+    if (Array.isArray(saved) && saved.length) {
+      const set = new Set(saved);
+      let any = false;
+      for (const r of rows) { const c = r.querySelector('.rowcheck'); c.checked = set.has(r.dataset.id); any = any || c.checked; }
+      if (any) activePanel = 'details';
+      document.querySelectorAll('[data-panel]').forEach((o) => o.classList.toggle('on', o.dataset.panel === activePanel));
+    }
+  } catch (e) {}
+  if (location.hash === '#defaults') document.getElementById('defaults').open = true;
+  updateCounts();
+})();
+</script>
+<%- include('_footer') %>

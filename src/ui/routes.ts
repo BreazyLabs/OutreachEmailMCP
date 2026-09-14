@@ -46,6 +46,8 @@ import { registerWarmupUiRoutes } from './warmup-routes.js';
 import { accountWarmupDetail } from '../warmup/stats.js';
 import { healthOf, HEALTH_LABELS } from '../warmup/health.js';
 import { placementChartSvg, CHART_LEGEND } from './charts.js';
+import { mailboxesPageLocals } from './warmup-routes.js';
+import { parseTags } from '../accounts/tags.js';
 import { WARMUP_FIELDS, resolveWarmupSettings } from '../warmup/settings.js';
 import { config as appConfig } from '../config.js';
 
@@ -156,26 +158,8 @@ export function registerUiRoutes(app: FastifyInstance) {
     const session = guard(req, reply);
     if (!session) return;
     const orgId = session.org.id;
-    const accounts = db
-      .select()
-      .from(schema.accounts)
-      .where(eq(schema.accounts.orgId, orgId))
-      .orderBy(desc(schema.accounts.createdAt))
-      .all();
-    const accountById = new Map(accounts.map((a) => [a.id, a]));
-    const recentJobs = db
-      .select()
-      .from(schema.sendJobs)
-      .orderBy(desc(schema.sendJobs.createdAt))
-      .limit(100)
-      .all()
-      .filter((j) => accountById.has(j.accountId))
-      .filter((j) => session.org.warmupShowInSendLog || j.source !== 'warmup')
-      .slice(0, 10);
-    return reply.view('dashboard.ejs', {
-      ...baseLocals(req, session),
-      page: 'dashboard',
-      accounts,
+    return reply.view('mailboxes.ejs', {
+      ...mailboxesPageLocals(req, session),
       connectLinks: {
         // Durable, reusable, revocable — the one to hand to whoever onboards
         // mailboxes. The per-provider links stay available for automations
@@ -184,10 +168,6 @@ export function registerUiRoutes(app: FastifyInstance) {
         google: config.googleEnabled ? createConnectLink('google', orgId) : null,
         microsoft: config.microsoftEnabled ? createConnectLink('microsoft', orgId) : null,
       },
-      recentJobs: recentJobs.map((j) => ({
-        ...publicJob(j),
-        accountEmail: accountById.get(j.accountId)?.email ?? j.accountId,
-      })),
       sequencers: SEQUENCER_LABELS,
     });
   });
@@ -242,8 +222,9 @@ export function registerUiRoutes(app: FastifyInstance) {
       warmupReady,
       warmup,
       warmupHealth: healthOf(warmup.summary),
+      accountTags: parseTags(account.tagsJson),
       healthLabels: HEALTH_LABELS,
-      warmupChart: warmup.summary.enabled ? placementChartSvg(warmup.daily, 30, 760, 160) : null,
+      warmupChart: warmup.summary.enabled ? placementChartSvg(warmup.daily, 30) : null,
       chartLegend: CHART_LEGEND,
       warmupFields: WARMUP_FIELDS,
       orgResolved: resolveWarmupSettings(session.org, null).settings,

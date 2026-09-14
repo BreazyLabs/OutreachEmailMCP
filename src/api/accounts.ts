@@ -12,6 +12,11 @@ import {
 } from '../auth/connect-links.js';
 import { config } from '../config.js';
 import { loadAccount, orgOf, requireScope } from './plugin.js';
+import { parseTags, setAccountTags, MAX_TAG_LENGTH, MAX_TAGS_PER_ACCOUNT } from '../accounts/tags.js';
+
+const accountTagsSchema = z
+  .object({ tags: z.array(z.string().max(MAX_TAG_LENGTH)).max(MAX_TAGS_PER_ACCOUNT).optional() })
+  .strict();
 
 export function publicAccount(a: typeof schema.accounts.$inferSelect) {
   return {
@@ -21,12 +26,13 @@ export function publicAccount(a: typeof schema.accounts.$inferSelect) {
     displayName: a.displayName,
     status: a.status,
     lastError: a.lastError,
+    tags: parseTags(a.tagsJson),
     createdAt: a.createdAt,
   };
 }
 
 export function registerAccountRoutes(app: FastifyInstance) {
-  app.get('/accounts', async (req, reply) => {
+  app.get<{ Querystring: { tag?: string } }>('/accounts', async (req, reply) => {
     if (!requireScope(req, reply, 'read')) return;
     const rows = db
       .select()
@@ -34,7 +40,23 @@ export function registerAccountRoutes(app: FastifyInstance) {
       .where(eq(schema.accounts.orgId, orgOf(req)))
       .orderBy(desc(schema.accounts.createdAt))
       .all();
-    return rows.map(publicAccount);
+    const tag = req.query.tag?.trim().toLowerCase();
+    const list = tag
+      ? rows.filter((a) => parseTags(a.tagsJson).some((t) => t.toLowerCase() === tag))
+      : rows;
+    return list.map(publicAccount);
+  });
+
+  // Tags are the one thing about a mailbox a caller edits directly: the rest
+  // is owned by the provider connection.
+  app.patch<{ Params: { accountId: string } }>('/accounts/:accountId', async (req, reply) => {
+    if (!requireScope(req, reply, 'accounts')) return;
+    const account = loadAccount(req.params.accountId, req);
+    if (!account) return reply.code(404).send({ error: 'Unknown account' });
+    const input = accountTagsSchema.parse(req.body ?? {});
+    if (input.tags) setAccountTags(account.id, input.tags);
+    const fresh = db.select().from(schema.accounts).where(eq(schema.accounts.id, account.id)).get();
+    return publicAccount(fresh ?? account);
   });
 
   // CSV with per-account SMTP settings for this proxy (auto-creates missing

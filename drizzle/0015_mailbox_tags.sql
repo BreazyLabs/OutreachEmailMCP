@@ -1,0 +1,1 @@
+ALTER TABLE `accounts` ADD `tags_json` text;

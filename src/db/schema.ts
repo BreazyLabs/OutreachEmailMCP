@@ -70,6 +70,8 @@ export const accounts = sqliteTable(
       .notNull()
       .default('active'),
     lastError: text('last_error'),
+    /** JSON array of free-form labels (campaign, client, batch). */
+    tagsJson: text('tags_json'),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
   },

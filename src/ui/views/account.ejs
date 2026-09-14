@@ -1,9 +1,17 @@
 <%- include('_header') %>
-<h1><%= account.email %> <span class="badge <%= account.status %>"><%= account.status %></span></h1>
+<p class="muted" style="margin:0"><a href="/ui">← Mailboxes</a></p>
+<h1 style="margin-top:0.3rem"><%= account.email %> <span class="badge <%= account.status %>"><%= account.status %></span></h1>
 <p class="muted">
   <%= account.provider %> · account id <code><%= account.id %></code>
   <% if (account.lastError) { %> · last error: <%= account.lastError %><% } %>
 </p>
+<form method="post" action="/ui/accounts/<%= account.id %>/warmup/tags" class="row" style="margin:-0.3rem 0 0.8rem">
+  <input type="hidden" name="_csrf" value="<%= csrf %>">
+  <label class="muted" for="tags">Tags</label>
+  <input id="tags" name="tags" value="<%= (typeof accountTags !== 'undefined' ? accountTags : []).join(', ') %>" placeholder="campaign-a, client-x (comma separated)" style="min-width:320px">
+  <button type="submit" class="secondary">Save tags</button>
+  <span class="muted">Bundle mailboxes per campaign; filter and edit the bundle on the Mailboxes page.</span>
+</form>
 <% if (account.status === 'auth_error') { %>
   <div class="alert error">
     Authentication expired — <a href="/auth/<%= account.provider %>/start">reconnect this account</a>. Queued mail resumes automatically after reconnecting.
@@ -193,7 +201,7 @@
       <input type="hidden" name="_csrf" value="<%= csrf %>">
       <%- include('_warmup-fields', { fields: warmupFields, values: w.overrides, baseline: orgResolved, mode: 'override', sources: w.settings.sources }) %>
       <button type="submit" style="margin-top:0.8rem">Save mailbox settings</button>
-      <a class="muted" href="/ui/warmup" style="margin-left:0.8rem">Workspace defaults →</a>
+      <a class="muted" href="/ui#defaults" style="margin-left:0.8rem">Workspace defaults →</a>
     </form>
     <% if (Object.keys(w.overrides).length) { %>
     <form method="post" action="/ui/accounts/<%= account.id %>/warmup/reset" style="margin-top:0.5rem">

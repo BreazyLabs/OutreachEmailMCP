@@ -25,6 +25,7 @@ import { setOrgTag, invalidateTagCache } from './identity.js';
 import { healthOf, orgHealth } from './health.js';
 import { connectedDomains, domainHealthFor, issuesOf, dnsVerdict, refreshDomainHealth } from './dns-health.js';
 import { logActivity } from '../observability/activity.js';
+import { editAccountTags } from '../accounts/tags.js';
 
 const personaSchema = z
   .object({
@@ -58,8 +59,12 @@ const orgPatchSchema = z
 const bulkSchema = z
   .object({
     accountIds: z.array(z.string()).min(1).max(500),
-    action: z.enum(['enable', 'disable', 'pause', 'resume', 'settings', 'clear_overrides']).optional(),
+    action: z.enum(['enable', 'disable', 'pause', 'resume', 'settings', 'clear_overrides', 'tags']).optional(),
     settings: z.record(z.unknown()).optional(),
+    tags: z
+      .object({ add: z.array(z.string()).max(50).optional(), remove: z.array(z.string()).max(50).optional() })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -148,6 +153,19 @@ export function runBulk(
     for (const id of ids) {
       clearAccountOverrides(id);
       results.push({ accountId: id, ok: true });
+    }
+  } else if (input.action === 'tags' || input.tags) {
+    const change = input.tags ?? {};
+    if ((change.add?.length ?? 0) + (change.remove?.length ?? 0) > 0) {
+      editAccountTags(ids, change);
+      for (const id of ids) results.push({ accountId: id, ok: true });
+      logActivity({
+        category: 'warmup',
+        action: 'bulk-tags',
+        status: 'ok',
+        orgId,
+        detail: `${ids.length} mailbox(es): +${(change.add ?? []).join(',')} -${(change.remove ?? []).join(',')}`.slice(0, 400),
+      });
     }
   } else if (input.action && input.action !== 'settings') {
     results.push(...bulkWarmupAction(ids, input.action));

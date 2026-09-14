@@ -57,14 +57,14 @@ function padDays(points: DailyPoint[], days: number): DailyPoint[] {
  * Placement over time: stacked daily bars (inbox / category / spam / missing)
  * with a y-axis, light gridlines, and per-bar hover titles. One scale.
  */
-export function placementChartSvg(points: DailyPoint[], days = 30, width = 760, height = 200): string {
+export function placementChartSvg(points: DailyPoint[], days = 30, width = 1200, height = 230): string {
   const series = padDays(points, days);
-  const pad = { l: 34, r: 8, t: 8, b: 22 };
+  const pad = { l: 40, r: 10, t: 10, b: 26 };
   const plotW = width - pad.l - pad.r;
   const plotH = height - pad.t - pad.b;
   const max = Math.max(1, ...series.map((d) => Math.max(d.sent, d.inbox + d.category + d.spam + d.missing)));
   const nice = niceCeil(max);
-  const gap = 2;
+  const gap = 4;
   const bw = Math.max(2, (plotW - gap * (days - 1)) / days);
   const y = (v: number) => pad.t + plotH - (v / nice) * plotH;
 
@@ -74,7 +74,7 @@ export function placementChartSvg(points: DailyPoint[], days = 30, width = 760, 
     const v = (nice / ticks) * i;
     const yy = y(v);
     grid.push(`<line x1="${pad.l}" x2="${width - pad.r}" y1="${yy.toFixed(1)}" y2="${yy.toFixed(1)}" stroke="var(--line)" stroke-width="1"/>`);
-    grid.push(`<text x="${pad.l - 6}" y="${(yy + 3).toFixed(1)}" text-anchor="end" font-size="10" fill="var(--muted)">${Math.round(v)}</text>`);
+    grid.push(`<text x="${pad.l - 8}" y="${(yy + 4).toFixed(1)}" text-anchor="end" font-size="12" fill="var(--muted)">${Math.round(v)}</text>`);
   }
 
   const bars: string[] = [];
@@ -95,16 +95,18 @@ export function placementChartSvg(points: DailyPoint[], days = 30, width = 760, 
       if (!v) continue;
       const h = (v / nice) * plotH;
       top -= h;
-      parts.push(`<rect x="${x.toFixed(1)}" y="${top.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, h - 1).toFixed(1)}" fill="${fill}" rx="1.5"/>`);
+      parts.push(`<rect x="${x.toFixed(1)}" y="${top.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(0, h - 1.5).toFixed(1)}" fill="${fill}" rx="2"/>`);
     }
     const label = `${d.date}: sent ${d.sent}, inbox ${d.inbox}, category ${d.category}, spam ${d.spam}, missing ${d.missing}, received ${d.received}, replies ${d.replies}`;
     bars.push(`<g class="bar"><title>${esc(label)}</title><rect x="${(x - gap / 2).toFixed(1)}" y="${pad.t}" width="${(bw + gap).toFixed(1)}" height="${plotH}" fill="transparent"/>${parts.join('')}</g>`);
     if (i % Math.ceil(days / 6) === 0 || i === days - 1) {
-      bars.push(`<text x="${(x + bw / 2).toFixed(1)}" y="${height - 6}" text-anchor="middle" font-size="10" fill="var(--muted)">${d.date.slice(5)}</text>`);
+      bars.push(`<text x="${(x + bw / 2).toFixed(1)}" y="${height - 8}" text-anchor="middle" font-size="12" fill="var(--muted)">${d.date.slice(5)}</text>`);
     }
   });
 
-  return `<svg class="placement-chart" viewBox="0 0 ${width} ${height}" width="100%" height="${height}" preserveAspectRatio="none" role="img" aria-label="Warmup placement per day"><title>Warmup placement per day</title>${grid.join('')}${bars.join('')}</svg>`;
+  // Drawn at a wide fixed size and scaled as a whole: the earlier
+  // preserveAspectRatio="none" stretched bars and text with the container.
+  return `<svg class="placement-chart" viewBox="0 0 ${width} ${height}" width="100%" style="display:block; width:100%; height:auto; max-height:${height}px" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Warmup placement per day"><title>Warmup placement per day</title>${grid.join('')}${bars.join('')}</svg>`;
 }
 
 function niceCeil(v: number): number {
