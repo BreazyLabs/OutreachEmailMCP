@@ -191,15 +191,34 @@ export function registerDomainsUiRoutes(app: FastifyInstance): void {
         email: str(body.c_email),
       },
     };
-    const required: [string, string][] = [['API user', cfg.apiUser], ['API key', cfg.apiKey], ['client IP', cfg.clientIp], ['first name', cfg.contact.firstName], ['last name', cfg.contact.lastName], ['address', cfg.contact.address1], ['city', cfg.contact.city], ['postal code', cfg.contact.postalCode], ['country', cfg.contact.country], ['phone', cfg.contact.phone], ['email', cfg.contact.email]];
+    const required: [string, string][] = [['API user', cfg.apiUser], ['API key', cfg.apiKey], ['client IP', cfg.clientIp]];
     const miss = required.find(([, v]) => !v);
     if (miss) return reply.redirect(back('error', `Namecheap: ${miss[0]} is required.`, 'integrations'));
+    // A blank contact means "use the account's default address", the way the
+    // Namecheap site itself fills the registrant in.
+    let contactNote = '';
+    if (!cfg.contact.firstName && !cfg.contact.lastName) {
+      try {
+        const fromBook = await new NamecheapClient(cfg).defaultContact();
+        if (fromBook) {
+          cfg.contact = fromBook;
+          contactNote = ` Registrant taken from the account's address book: ${fromBook.firstName} ${fromBook.lastName}, ${fromBook.city}.`;
+        }
+      } catch (err) {
+        setIntegration(session.org.id, 'namecheap', cfg);
+        markIntegration(session.org.id, 'namecheap', { ok: false, error: String(err) });
+        return reply.redirect(back('error', `Saved, but Namecheap did not answer: ${String(err).slice(0, 300)}`, 'integrations'));
+      }
+    }
+    const contactRequired: [string, string][] = [['first name', cfg.contact.firstName], ['last name', cfg.contact.lastName], ['address', cfg.contact.address1], ['city', cfg.contact.city], ['postal code', cfg.contact.postalCode], ['country', cfg.contact.country], ['phone', cfg.contact.phone], ['email', cfg.contact.email]];
+    const missC = contactRequired.find(([, v]) => !v);
+    if (missC) return reply.redirect(back('error', `Namecheap registrant: ${missC[0]} is required (the address book had no default to copy).`, 'integrations'));
     if (!/^\+\d{1,3}\.\d{4,}$/.test(cfg.contact.phone)) return reply.redirect(back('error', 'Namecheap wants the phone as +CC.number, e.g. +31.612345678', 'integrations'));
     setIntegration(session.org.id, 'namecheap', cfg);
     try {
       const prices = await new NamecheapClient(cfg).pricing(['com']);
       markIntegration(session.org.id, 'namecheap', { ok: true });
-      return reply.redirect(back('notice', `Namecheap connected${prices[0] ? ` (.com is ${prices[0].price} ${prices[0].currency} a year)` : ''}.`, 'integrations'));
+      return reply.redirect(back('notice', `Namecheap connected${prices[0] ? ` (.com is ${prices[0].price} ${prices[0].currency} a year)` : ''}.${contactNote}`, 'integrations'));
     } catch (err) {
       markIntegration(session.org.id, 'namecheap', { ok: false, error: String(err) });
       return reply.redirect(back('error', `Saved, but the test call failed: ${String(err).slice(0, 300)}`, 'integrations'));

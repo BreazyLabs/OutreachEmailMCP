@@ -298,7 +298,7 @@
       <% if (nc.lastError) { %><div class="note bad"><%= nc.lastError %></div><% } %>
       <form method="post" action="/ui/integrations/namecheap">
         <input type="hidden" name="_csrf" value="<%= csrf %>">
-        <p class="muted" style="margin:0 0 0.6rem">Enable API access in the Namecheap profile (Tools → API access), whitelist this server's public IP, and paste the key. Registration needs a registrant contact; the same contact is used for every role, with WhoisGuard on.</p>
+        <p class="muted" style="margin:0 0 0.6rem">Enable API access in the Namecheap profile (Tools → API access), whitelist this server's public IP, and paste the key. Registration needs a registrant contact: leave the contact blank and the account's default address is copied in on save, the way the Namecheap site does it. The same contact is used for every role, with WhoisGuard on.</p>
         <div class="grid3">
           <div class="field"><label>API user</label><input name="apiUser" value="<%= nc.apiUser %>" required></div>
           <div class="field"><label>API key <%= nc.configured ? '(leave blank to keep ' + nc.apiKeyMasked + ')' : '' %></label><input name="apiKey" placeholder="<%= nc.configured ? nc.apiKeyMasked : '' %>" autocomplete="off"></div>

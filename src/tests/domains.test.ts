@@ -189,3 +189,20 @@ describe('Premium Inboxes client and order flow', () => {
     await expect(client.workspaces()).rejects.toBeInstanceOf(PremiumInboxesError);
   });
 });
+
+describe('Namecheap address book', () => {
+  it('reads the default address as the registrant contact', async () => {
+    const { NamecheapClient } = await import('../domains/namecheap.js');
+    const cfg = { apiUser: 'u', apiKey: 'k', username: 'u', clientIp: '1.2.3.4', contact: { firstName: '', lastName: '', address1: '', city: '', stateProvince: '', postalCode: '', country: '', phone: '', email: '' } };
+    const client = new NamecheapClient(cfg, fakeFetch((url) => {
+      const cmd = new URL(url).searchParams.get('Command');
+      if (cmd === 'namecheap.users.address.getList') return { body: xml('<AddressGetListResult><List AddressId="7" AddressName="Home" IsDefault="false" /><List AddressId="9" AddressName="Business" IsDefault="true" /></AddressGetListResult>') };
+      if (cmd === 'namecheap.users.address.getInfo') {
+        expect(new URL(url).searchParams.get('AddressId')).toBe('9');
+        return { body: xml('<GetAddressInfoResult><AddressId>9</AddressId><FirstName>Daniel</FirstName><LastName>T</LastName><Organization>Breazy</Organization><Address1>Straat 1</Address1><City>Amsterdam</City><StateProvince>NH</StateProvince><Zip>1000AA</Zip><Country>NL</Country><Phone>+31.612345678</Phone><EmailAddress>d@x.test</EmailAddress></GetAddressInfoResult>') };
+      }
+      return { body: xml('', 'ERROR') };
+    }));
+    expect(await client.defaultContact()).toEqual({ firstName: 'Daniel', lastName: 'T', organization: 'Breazy', address1: 'Straat 1', city: 'Amsterdam', stateProvince: 'NH', postalCode: '1000AA', country: 'NL', phone: '+31.612345678', email: 'd@x.test' });
+  });
+});

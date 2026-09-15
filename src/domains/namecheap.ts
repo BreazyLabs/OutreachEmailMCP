@@ -71,7 +71,8 @@ export class NamecheapError extends Error {
 
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
 
-const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '', textNodeName: 'text' });
+// Everything stays a string: a phone like +31.612345678 must not become a number.
+const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '', textNodeName: 'text', parseTagValue: false, parseAttributeValue: false });
 const asArray = <T>(v: T | T[] | undefined): T[] => (v === undefined ? [] : Array.isArray(v) ? v : [v]);
 
 export class NamecheapClient {
@@ -178,6 +179,43 @@ export class NamecheapClient {
       transactionId: String(d.TransactionID ?? ''),
       whoisGuard: d.WhoisguardEnable === 'true',
     };
+  }
+
+  /** The account's address book; the default entry is the registrant Namecheap itself would use. */
+  async addresses(): Promise<{ id: string; name: string; isDefault: boolean }[]> {
+    const r = await this.call('namecheap.users.address.getList', {});
+    const rows = asArray((r.AddressGetListResult as { List?: unknown })?.List) as Record<string, string>[];
+    return rows.map((a) => ({ id: String(a.AddressId), name: String(a.AddressName ?? ''), isDefault: a.IsDefault === 'true' }));
+  }
+
+  async addressInfo(addressId: string): Promise<RegistrantContact> {
+    const r = await this.call('namecheap.users.address.getInfo', { AddressId: addressId });
+    const info = (r.GetAddressInfoResult ?? {}) as Record<string, unknown>;
+    const text = (k: string): string => {
+      const v = info[k];
+      if (v === undefined || v === null) return '';
+      if (typeof v === 'object') return String((v as { text?: string }).text ?? '');
+      return String(v);
+    };
+    return {
+      firstName: text('FirstName'),
+      lastName: text('LastName'),
+      organization: text('Organization') || undefined,
+      address1: text('Address1'),
+      city: text('City'),
+      stateProvince: text('StateProvince') || text('StateProvinceChoice'),
+      postalCode: text('Zip'),
+      country: text('Country'),
+      phone: text('Phone'),
+      email: text('EmailAddress'),
+    };
+  }
+
+  /** The default address book entry as a registrant contact, or null when the book is empty. */
+  async defaultContact(): Promise<RegistrantContact | null> {
+    const all = await this.addresses();
+    const pick = all.find((a) => a.isDefault) ?? all[0];
+    return pick ? this.addressInfo(pick.id) : null;
   }
 
   async list(): Promise<RegistrarDomain[]> {
