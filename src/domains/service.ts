@@ -123,25 +123,58 @@ export async function buyDomains(orgId: string, domainList: string[], tags: stri
     }
   }
   markIntegration(orgId, 'namecheap', results.some((r) => r.ok) || results.length === 0 ? { ok: true } : { ok: false, error: results[0]?.error ?? 'purchase failed' });
+  if (results.some((r) => r.ok)) {
+    try {
+      await importRegistrarDomains(orgId);
+    } catch (err) {
+      logger.debug({ orgId, err: String(err) }, 'registrar refresh after purchase failed');
+    }
+  }
   return results;
 }
 
-/** Bring the registrar's domain list in, without touching what is already tracked. */
-export async function importRegistrarDomains(orgId: string): Promise<{ imported: number; total: number }> {
+/** Registrar-side facts kept on a domain row (registrar_json). */
+export interface RegistrarInfo {
+  domainId?: string;
+  orderId?: string;
+  transactionId?: string;
+  chargedAmount?: number;
+  whoisGuard?: boolean;
+  /** Namecheap's auto-renew flag as of the last list; the API cannot change it. */
+  autoRenew?: boolean;
+  checkedAt?: number;
+}
+
+export function registrarInfo(d: Pick<Domain, 'registrarJson'>): RegistrarInfo {
+  try {
+    return d.registrarJson ? (JSON.parse(d.registrarJson) as RegistrarInfo) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Bring the registrar's domain list in, without touching what is already tracked;
+ *  refresh expiry and the auto-renew flag on the ones we know. */
+export async function importRegistrarDomains(orgId: string): Promise<{ imported: number; total: number; autoRenewOn: string[] }> {
   const nc = clients.namecheap(orgId);
   const remote = await nc.list();
   markIntegration(orgId, 'namecheap', { ok: true });
-  const known = new Set(listDomains(orgId).map((d) => d.domain));
+  const known = new Map(listDomains(orgId).map((d) => [d.domain, d]));
   let imported = 0;
+  const autoRenewOn: string[] = [];
+  const now = Date.now();
   for (const d of remote) {
-    if (known.has(d.domain)) {
-      db.update(schema.domains).set({ expiresAt: d.expiresAt, registrar: 'namecheap', updatedAt: Date.now() }).where(and(eq(schema.domains.orgId, orgId), eq(schema.domains.domain, d.domain))).run();
+    const existing = known.get(d.domain);
+    if (existing) {
+      const info = { ...registrarInfo(existing), autoRenew: d.autoRenew, checkedAt: now };
+      db.update(schema.domains).set({ expiresAt: d.expiresAt, registrar: 'namecheap', registrarJson: JSON.stringify(info), updatedAt: now }).where(eq(schema.domains.id, existing.id)).run();
+      if (d.autoRenew && info.orderId) autoRenewOn.push(d.domain);
       continue;
     }
-    upsertDomain(orgId, d.domain, { registrar: 'namecheap', status: 'purchased', expiresAt: d.expiresAt });
+    upsertDomain(orgId, d.domain, { registrar: 'namecheap', status: 'purchased', expiresAt: d.expiresAt, registrarJson: JSON.stringify({ autoRenew: d.autoRenew, checkedAt: now }) });
     imported++;
   }
-  return { imported, total: remote.length };
+  return { imported, total: remote.length, autoRenewOn };
 }
 
 /** Domains that carry connected mailboxes but were never recorded here. */
@@ -481,12 +514,24 @@ export async function syncOrders(orgId: string): Promise<{ orders: number; deliv
   return { orders: remote.length, delivered };
 }
 
+const registrarSyncedAt = new Map<string, number>();
+
 export async function syncAllOrders(): Promise<void> {
   for (const orgId of orgsWithIntegration('premiuminboxes')) {
     try {
       await syncOrders(orgId);
     } catch (err) {
       logger.warn({ orgId, err: String(err) }, 'order sync failed');
+    }
+  }
+  // Expiry and auto-renew flags from the registrar, once a day per workspace.
+  for (const orgId of orgsWithIntegration('namecheap')) {
+    if ((registrarSyncedAt.get(orgId) ?? 0) > Date.now() - 24 * 3600_000) continue;
+    try {
+      await importRegistrarDomains(orgId);
+      registrarSyncedAt.set(orgId, Date.now());
+    } catch (err) {
+      logger.warn({ orgId, err: String(err) }, 'registrar sync failed');
     }
   }
 }
@@ -499,6 +544,7 @@ export interface DomainRow extends Domain {
   tags: string[];
   /** Bought or ordered through this platform, as opposed to imported from the registrar or the provisioner. */
   platform: boolean;
+  registrarInfo: RegistrarInfo;
   dns: { verdict: 'ok' | 'warn' | 'bad' | 'unchecked'; issues: string[] };
   mailboxes: { connected: number; delivered: number };
   order: { id: string; externalId: string | null; status: string } | null;
@@ -549,7 +595,8 @@ export function domainsOverview(orgId: string): { domains: DomainRow[]; orders: 
       return {
         ...d,
         tags: parseTags(d.tagsJson),
-        platform: !!d.registrarJson || !importedOrder(o),
+        platform: !!registrarInfo(d).orderId || !importedOrder(o),
+        registrarInfo: registrarInfo(d),
         dns: { verdict: dnsVerdict(h), issues: issuesOf(h) },
         mailboxes: { connected: connectedByDomain.get(d.domain) ?? 0, delivered: deliveredByDomain.get(d.domain) ?? 0 },
         order: o ? { id: o.id, externalId: o.externalId, status: o.status } : null,

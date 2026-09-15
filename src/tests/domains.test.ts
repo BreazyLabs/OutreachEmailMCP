@@ -316,3 +316,30 @@ describe('Namecheap balance guard', () => {
     expect(creates).toBe(0);
   });
 });
+
+describe('registrar auto-renew tracking', () => {
+  it('records the auto-renew flag from the registrar list and names domains bought here that still have it on', async () => {
+    const service = await import('../domains/service.js');
+    const { NamecheapClient } = await import('../domains/namecheap.js');
+    const { createOrgWithOwner } = await import('../tenancy/orgs.js');
+    const { db, schema } = await import('../db/index.js');
+    const orgId = createOrgWithOwner({ orgName: 'Renew Co', email: 'owner@renew.test', password: 'pw-pw-pw-pw-1' }).orgId;
+    const cfg = { apiUser: 'u', apiKey: 'k', username: 'u', clientIp: '1.2.3.4', contact: { firstName: 'D', lastName: 'T', address1: 'S 1', city: 'A', stateProvince: 'NH', postalCode: '1', country: 'NL', phone: '+31.612345678', email: 'd@x.test' } };
+    service.clients.namecheap = () => new NamecheapClient(cfg, fakeFetch((url) => {
+      const cmd = new URL(url).searchParams.get('Command');
+      if (cmd === 'namecheap.domains.getList') return { body: xml('<DomainGetListResult><Domain ID="1" Name="bought.nl" Expires="09/15/2027" IsExpired="false" AutoRenew="true" /><Domain ID="2" Name="old.nl" Expires="01/01/2027" IsExpired="false" AutoRenew="true" /></DomainGetListResult><Paging><TotalItems>2</TotalItems></Paging>') };
+      return { body: xml('', 'ERROR') };
+    }));
+    const now = Date.now();
+    db.insert(schema.domains).values({ id: 'r1', orgId, domain: 'bought.nl', registrar: 'namecheap', status: 'purchased', registrarJson: JSON.stringify({ orderId: '42', chargedAmount: 7.48 }), createdAt: now, updatedAt: now }).run();
+    const r = await service.importRegistrarDomains(orgId);
+    expect(r).toEqual({ imported: 1, total: 2, autoRenewOn: ['bought.nl'] });
+    const ov = service.domainsOverview(orgId);
+    const bought = ov.domains.find((d) => d.domain === 'bought.nl')!;
+    expect(bought.platform).toBe(true);
+    expect(bought.registrarInfo).toMatchObject({ orderId: '42', autoRenew: true });
+    const old = ov.domains.find((d) => d.domain === 'old.nl')!;
+    expect(old.platform).toBe(false);
+    expect(old.registrarInfo.autoRenew).toBe(true);
+  });
+});

@@ -10,6 +10,7 @@
   const deliveredTotal = orders.reduce((n, o) => n + o.delivered, 0);
   const connectedTotal = orders.reduce((n, o) => n + o.connected, 0);
   const idle = domains.filter((d) => d.status === 'purchased');
+  const autoRenewOn = domains.filter((d) => d.platform && d.registrar === 'namecheap' && d.registrarInfo.autoRenew);
   const stepClass = (s) => ({ purchased: 'paused', ordered: 'ramping', provisioned: 'queued', connected: 'active' })[s] || '';
   const w = wizard;
   const picked = new Set(w.picked);
@@ -113,6 +114,9 @@
   <div class="kpi"><div class="n"><%= (pricePerInboxCents / 100).toFixed(2) %><small> / inbox</small></div><div class="l">per 4 weeks</div><div class="muted" style="font-size:0.75rem">learned from your subscriptions</div></div>
 </div>
 
+<% if (autoRenewOn.length) { %>
+<div class="alert error" style="margin-top:0.8rem"><b><%= autoRenewOn.length %> domain<%= autoRenewOn.length === 1 ? ' bought here has' : 's bought here have' %> auto-renew on at Namecheap:</b> <%= autoRenewOn.slice(0, 8).map((d) => d.domain).join(', ') %><%= autoRenewOn.length > 8 ? ` and ${autoRenewOn.length - 8} more` : '' %>. Namecheap's API cannot switch it off, so do it once in the <a href="https://ap.www.namecheap.com/domains/list/" target="_blank" rel="noopener">Namecheap domain list</a> (tick the domains, Auto-Renew, Off); the flag here refreshes daily and after every purchase.</div>
+<% } %>
 <h2 style="display:flex; justify-content:space-between; align-items:baseline">Domains <span class="muted" style="font-weight:400; font-size:0.82rem"><% if (showAll) { %><a href="/ui/domains">Show only domains bought here</a><% } else if (hidden) { %><a href="/ui/domains?all=1">Show all <%= domains.length %>, including <%= hidden %> imported</a><% } %></span></h2>
 <div class="card">
   <% if (shown.length === 0) { %>
@@ -120,7 +124,7 @@
   <% } else { %>
   <div style="overflow-x:auto">
   <table>
-    <thead><tr><th>Domain</th><th>Step</th><th>Bought</th><th>Expires</th><th title="SPF, DKIM, DMARC of the domain">DNS</th><th class="num">Mailboxes</th><th>Order</th></tr></thead>
+    <thead><tr><th>Domain</th><th>Step</th><th>Bought</th><th>Expires</th><th title="Namecheap's auto-renew flag, refreshed daily">Renew</th><th title="SPF, DKIM, DMARC of the domain">DNS</th><th class="num">Mailboxes</th><th>Order</th></tr></thead>
     <tbody>
     <% for (const d of shown) { %>
     <tr class="<%= d.status === 'connected' ? 'dim' : '' %>">
@@ -128,6 +132,7 @@
       <td><span class="badge <%= stepClass(d.status) %>"><%= d.status === 'purchased' ? 'idle' : d.status %></span></td>
       <td class="muted"><%= d.purchasedAt ? fmtDate(d.purchasedAt) : (d.registrar === 'namecheap' ? 'Namecheap' : '—') %></td>
       <td class="muted"><%= fmtDate(d.expiresAt) %></td>
+      <td><% if (d.registrar === 'namecheap' && d.registrarInfo.autoRenew !== undefined) { %><span class="badge <%= d.registrarInfo.autoRenew ? 'failed' : 'paused' %>" title="Auto-renew at Namecheap"><%= d.registrarInfo.autoRenew ? 'auto' : 'manual' %></span><% } else { %><span class="muted">—</span><% } %></td>
       <td><% const dv = d.dns.verdict; %><span class="health <%= dv === 'ok' ? 'healthy' : dv === 'warn' ? 'watch' : dv === 'bad' ? 'at_risk' : 'no_data' %>" title="<%= d.dns.issues.length ? d.dns.issues.join(' · ') : dv === 'unchecked' ? 'Checked once a mailbox on it is connected' : 'SPF, DKIM, DMARC present' %>"><span class="dot"></span><%= dv === 'unchecked' ? '…' : dv %></span></td>
       <td class="num"><%= d.mailboxes.connected %><span class="muted">/<%= Math.max(d.mailboxes.delivered, d.mailboxes.connected) %></span></td>
       <td class="muted"><% if (d.order) { %><button type="button" class="ghost" style="padding:0.15rem 0.5rem; font-size:0.75rem" data-open="dlg-order-<%= d.order.id %>"><%= d.order.status %></button><% } else { %>—<% } %></td>
