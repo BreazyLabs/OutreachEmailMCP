@@ -117,9 +117,11 @@ describe('Premium Inboxes client and order flow', () => {
       { firstName: 'Dennis', lastName: 'Jansen', domains: ['getbreazy.nl'], prefixVariants: ['dennis', 'dennis.jansen'] },
       { firstName: 'Dennis', lastName: 'Jansen', domains: ['trybreazy.nl'], prefixVariants: ['dennis', 'dennis.jansen'] },
     ]);
-    expect(body.additionalInfo).toMatch(/do NOT connect these mailboxes to a sequencer/);
+    expect(body.additionalInfo).toMatch(/do NOT add the mailboxes to Instantly/);
     expect(body.additionalInfo).toContain('http://localhost:3000/');
-    expect(body).not.toHaveProperty('sequencer');
+    expect(body.sequencer.platform).toMatch(/^Other/);
+    expect(body.sequencer.username).toContain('http://localhost:3000/');
+    expect(body.sequencer.enableWarmup).toBe(false);
   });
 
   it('places an order, mirrors the provider status, and moves domains along as mailboxes are delivered and connected', async () => {

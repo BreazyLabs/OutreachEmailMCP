@@ -22,9 +22,22 @@ export interface PiHosting {
   porkbunAccessTutorial?: string;
 }
 
+/** The provisioner's sequencer enum; "Other" hands the details over in additionalInfo. */
+export const PI_SEQUENCER_OTHER = 'Other - Indicated @ "Additional Information" Field Below';
+
+export interface PiSequencer {
+  platform: string;
+  username: string;
+  password: string;
+  workspaceName?: string;
+  enableWarmup?: boolean;
+}
+
 export interface PiPurchase {
   emailProvider: 'Google' | 'Microsoft';
   hosting: PiHosting;
+  /** Optional to their validator, but their handler crashes without it; always sent. */
+  sequencer: PiSequencer;
   domains: string;
   forwardedDomain?: string;
   numberOfInboxes: number;

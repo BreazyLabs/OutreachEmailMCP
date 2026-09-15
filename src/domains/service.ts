@@ -14,7 +14,7 @@ import { createConnectHubLink } from '../auth/connect-links.js';
 import { domainHealthFor, dnsVerdict, issuesOf } from '../warmup/dns-health.js';
 import { parseTags } from '../accounts/tags.js';
 import { NamecheapClient, type Availability, type TldPrice } from './namecheap.js';
-import { PremiumInboxesClient, type PiOrder, type PiPurchase, type PiDeliveredEmail } from './premiuminboxes.js';
+import { PremiumInboxesClient, PI_SEQUENCER_OTHER, type PiOrder, type PiPurchase, type PiDeliveredEmail } from './premiuminboxes.js';
 import { getIntegration, setIntegration, markIntegration, orgsWithIntegration } from './integrations.js';
 import { suggestDomains, splitDomain, type Suggestion } from './names.js';
 import { localParts } from './patterns.js';
@@ -243,7 +243,7 @@ export function buildPurchase(orgId: string, input: OrderInput, hosting: PiPurch
   if (!first) throw new Error('At least one persona is required');
   const hubLink = createConnectHubLink(orgId);
   const note = [
-    `Please do NOT connect these mailboxes to a sequencer. Connect each one to our mail gateway (OutreachEmailMCP) through this link instead, signed in as the mailbox: ${hubLink}`,
+    `Sequencer: OutreachEmailMCP mail gateway (not a regular sequencer). Please do NOT add the mailboxes to Instantly/Smartlead. Connect each mailbox to the gateway through this link, signed in as the mailbox, no other login needed: ${hubLink}`,
     !hosting.username && !hosting.password ? `DNS: please use the ${hosting.platform} access you already have on file for this account.` : '',
     input.additionalInfo?.trim() ?? '',
   ]
@@ -256,6 +256,9 @@ export function buildPurchase(orgId: string, input: OrderInput, hosting: PiPurch
   return {
     emailProvider: input.emailProvider === 'google' ? 'Google' : 'Microsoft',
     hosting,
+    // "Other": the link in additionalInfo is the whole hookup; the two strings
+    // are required by their validator and read by a person.
+    sequencer: { platform: PI_SEQUENCER_OTHER, username: hubLink, password: 'not needed: open the link signed in as the mailbox', enableWarmup: false },
     domains: input.domains.join('\n'),
     forwardedDomain: input.forwardedDomain,
     numberOfInboxes: input.domains.length * input.inboxesPerDomain,
