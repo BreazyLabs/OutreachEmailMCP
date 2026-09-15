@@ -5,6 +5,7 @@ import { config } from '../config.js';
 import { logger } from '../logger.js';
 
 export type ActivityCategory =
+  | 'domains'
   | 'smtp'
   | 'imap'
   | 'api'

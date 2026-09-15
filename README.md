@@ -316,6 +316,15 @@ of `message`, so one endpoint can drive a delivery dashboard without polling.
 
 Verify the signature, then fetch the full body via the read API using `message.id`. Non-2xx responses are retried up to 6 times with exponential backoff; see delivery history in the UI or `GET /api/v1/webhooks/:id/deliveries`. New mail is detected by polling (default every 60s, `POLL_INTERVAL`); no public inbound URL is required. Webhook targets that resolve to private/loopback addresses are rejected unless `WEBHOOKS_ALLOW_PRIVATE=true`.
 
+## Domains and mailbox provisioning
+
+The **Domains** page takes a batch from a brand word to connected mailboxes. Connect two integrations per workspace (credentials are stored encrypted with `MASTER_KEY`):
+
+- **Namecheap** (API user, key, whitelisted IP, registrant contact): *Find & buy* suggests names in the shape real companies use (`getbreazy.nl`, `breazygrowth.com`), checks availability and first-year prices, and registers what you tick with WhoisGuard on. *Import domains* pulls in the account's existing domains and adopts the domains of mailboxes already connected.
+- **Premium Inboxes** (agency API token, workspace, the registrar or DNS-host login their team uses to set DNS, and order defaults): *Order mailboxes* places a purchase order for the ticked domains — provider, inboxes per domain, address patterns, a persona per domain, password — and asks them, in the order notes, to connect the mailboxes to this gateway through the onboarding link rather than to a sequencer. Orders are mirrored every 10 minutes: status, issues, and the delivered mailboxes with their passwords, each marked *connected* once it exists here. A domain moves purchased → ordered → provisioned → connected on its own.
+
+What still needs a person: the OAuth consent for each delivered mailbox (open the onboarding link signed in as the mailbox, or hand the order's checklist to Premium Inboxes). Mailbox passwords alone do not open the Gmail or Graph API.
+
 ## Warmup (built-in inbox warmup pool)
 
 Every connected mailbox can opt into a **warmup pool**: the mailboxes on the proxy write to each other in short, human-looking threads, and the engine watches where each message lands and does what a person's mail client would do with it. Nothing about it is visible to the tools that use the gateway — the REST/MCP listings, IMAP, webhooks, the send log and the stats all exclude warmup traffic — so a sequencer watching the mailbox never mistakes pool chatter for a reply.

@@ -553,3 +553,83 @@ export type Webhook = typeof webhooks.$inferSelect;
 export type WebhookDelivery = typeof webhookDeliveries.$inferSelect;
 export type SmtpCredential = typeof smtpCredentials.$inferSelect;
 export type ImapMessage = typeof imapMessages.$inferSelect;
+
+// ---------------------------------------------------------------------------
+// Domains and mailbox provisioning: registrar purchases and orders placed at
+// a provisioning partner, so a batch goes from "brand name" to "mailboxes
+// connected" from one page.
+// ---------------------------------------------------------------------------
+
+/** Per-workspace credentials for outside services (registrar, provisioner). */
+export const integrations = sqliteTable(
+  'integrations',
+  {
+    id: text('id').primaryKey(),
+    orgId: text('org_id')
+      .notNull()
+      .references(() => orgs.id, { onDelete: 'cascade' }),
+    provider: text('provider', { enum: ['namecheap', 'premiuminboxes'] }).notNull(),
+    /** Encrypted JSON: keys, usernames, registrant contact, PI hosting block. */
+    configEnc: text('config_enc').notNull(),
+    /** Last successful call, for the status line. */
+    verifiedAt: integer('verified_at'),
+    lastError: text('last_error'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => [uniqueIndex('integrations_org_provider').on(t.orgId, t.provider)],
+);
+
+export const domains = sqliteTable(
+  'domains',
+  {
+    id: text('id').primaryKey(),
+    orgId: text('org_id')
+      .notNull()
+      .references(() => orgs.id, { onDelete: 'cascade' }),
+    domain: text('domain').notNull(),
+    registrar: text('registrar', { enum: ['namecheap', 'other'] }).notNull().default('other'),
+    /** purchased → ordered (at the provisioner) → provisioned (mailboxes exist) → connected (all mailboxes in the proxy). */
+    status: text('status', { enum: ['purchased', 'ordered', 'provisioned', 'connected'] })
+      .notNull()
+      .default('purchased'),
+    purchasedAt: integer('purchased_at'),
+    expiresAt: integer('expires_at'),
+    /** Registrar-side ids and the charged amount, for the audit trail. */
+    registrarJson: text('registrar_json'),
+    orderId: text('order_id'),
+    tagsJson: text('tags_json'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => [uniqueIndex('domains_org_domain').on(t.orgId, t.domain)],
+);
+
+/** An order placed at a provisioning partner (Premium Inboxes). */
+export const providerOrders = sqliteTable('provider_orders', {
+  id: text('id').primaryKey(),
+  orgId: text('org_id')
+    .notNull()
+    .references(() => orgs.id, { onDelete: 'cascade' }),
+  provider: text('provider', { enum: ['premiuminboxes'] }).notNull(),
+  /** The partner's order id. */
+  externalId: text('external_id'),
+  /** The partner's own status string, mirrored verbatim. */
+  status: text('status').notNull().default('submitted'),
+  emailProvider: text('email_provider', { enum: ['google', 'microsoft'] }).notNull(),
+  domainsJson: text('domains_json').notNull(),
+  /** What we sent (secrets stripped). */
+  requestJson: text('request_json').notNull(),
+  /** The partner's latest view of the order: issues, delivered mailboxes (encrypted: it carries passwords). */
+  resultEnc: text('result_enc'),
+  lastError: text('last_error'),
+  lastCheckedAt: integer('last_checked_at'),
+  deliveredAt: integer('delivered_at'),
+  createdAt: integer('created_at').notNull(),
+  updatedAt: integer('updated_at').notNull(),
+});
+
+export type Integration = typeof integrations.$inferSelect;
+export type Domain = typeof domains.$inferSelect;
+export type ProviderOrder = typeof providerOrders.$inferSelect;
+

@@ -61,11 +61,12 @@
   .auth-hint { text-align:center; color:var(--muted); font-size:0.8rem; margin:0.9rem 0 0; }
 </style>
 </head>
-<body class="<%= typeof page !== 'undefined' && (page === 'dashboard' || page === 'account') ? 'wide' : '' %>">
+<body class="<%= typeof page !== 'undefined' && (page === 'dashboard' || page === 'account' || page === 'domains') ? 'wide' : '' %>">
 <% if (typeof page !== 'undefined' && page !== 'login') { %>
 <nav>
   <span class="brand">📧 OutreachEmailMCP</span>
   <a href="/ui" class="<%= page === 'dashboard' || page === 'account' ? 'active' : '' %>">Mailboxes</a>
+  <a href="/ui/domains" class="<%= page === 'domains' ? 'active' : '' %>">Domains</a>
   <a href="/ui/apikeys" class="<%= page === 'apikeys' ? 'active' : '' %>">API keys</a>
   <a href="/ui/webhooks" class="<%= page === 'webhooks' ? 'active' : '' %>">Webhooks</a>
   <a href="/ui/sendlog" class="<%= page === 'sendlog' ? 'active' : '' %>">Send log</a>

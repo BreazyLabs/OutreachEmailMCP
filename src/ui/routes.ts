@@ -47,6 +47,7 @@ import { accountWarmupDetail } from '../warmup/stats.js';
 import { healthOf, HEALTH_LABELS } from '../warmup/health.js';
 import { placementChartSvg, CHART_LEGEND } from './charts.js';
 import { mailboxesPageLocals } from './warmup-routes.js';
+import { registerDomainsUiRoutes } from './domains-routes.js';
 import { parseTags } from '../accounts/tags.js';
 import { namesFor, setAccountNames, refreshAccountProfile } from '../accounts/profile.js';
 import { WARMUP_FIELDS, resolveWarmupSettings } from '../warmup/settings.js';
@@ -54,6 +55,7 @@ import { config as appConfig } from '../config.js';
 
 export function registerUiRoutes(app: FastifyInstance) {
   registerWarmupUiRoutes(app);
+  registerDomainsUiRoutes(app);
   // Public landing page; logged-in users go straight to the dashboard
   app.get('/', async (req, reply) => {
     if (hasValidUiSession(req)) return reply.redirect('/ui');

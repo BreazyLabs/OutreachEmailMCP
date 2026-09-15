@@ -1,0 +1,431 @@
+<%- include('_header') %>
+<%
+  const fmtDate = (t) => t ? new Date(t).toLocaleDateString() : '—';
+  const fmtWhen = (t) => t ? new Date(t).toLocaleString() : '—';
+  const nc = integrations.namecheap; const pi = integrations.premiuminboxes;
+  const counts = { purchased: 0, ordered: 0, provisioned: 0, connected: 0 };
+  for (const d of domains) counts[d.status] = (counts[d.status] || 0) + 1;
+  const deliveredTotal = orders.reduce((n, o) => n + o.delivered, 0);
+  const connectedTotal = orders.reduce((n, o) => n + o.connected, 0);
+  const orderable = domains.filter((d) => d.status === 'purchased');
+  const key = (d) => d.replace(/[^a-z0-9]/g, '_');
+  const stepClass = (s) => ({ purchased: 'paused', ordered: 'ramping', provisioned: 'queued', connected: 'active' })[s] || '';
+%>
+<style>
+  .pagehead { display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap; margin-bottom:0.2rem; }
+  .pagehead h1 { margin:0.4rem 0; }
+  .pagehead .row { gap:0.4rem; }
+  .btn.ghost, button.ghost { background:transparent; color:var(--fg); border:1px solid var(--line); }
+  .btn.ghost:hover, button.ghost:hover { border-color:var(--accent); color:var(--accent); }
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:0.7rem; margin-top:0.8rem; }
+  .kpi { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:0.65rem 0.85rem; }
+  .kpi .n { font-size:1.35rem; font-weight:700; font-variant-numeric:tabular-nums; line-height:1.15; }
+  .kpi .n small { font-size:0.8rem; color:var(--muted); font-weight:500; }
+  .kpi .l { color:var(--muted); font-size:0.74rem; text-transform:uppercase; letter-spacing:0.04em; margin-top:0.15rem; }
+  .kpi.bad .n { color:var(--err); } .kpi.good .n { color:var(--ok); } .kpi.warn .n { color:var(--warn); }
+  .badge.ramping { background:color-mix(in srgb, var(--warn) 15%, transparent); color:var(--warn); }
+  .badge.paused { background:color-mix(in srgb, var(--muted) 15%, transparent); color:var(--muted); }
+  .health { display:inline-flex; align-items:center; gap:0.35rem; font-weight:600; font-size:0.8rem; white-space:nowrap; }
+  .health .dot { width:9px; height:9px; border-radius:50%; display:inline-block; }
+  .health.healthy { color:var(--ok); } .health.healthy .dot { background:var(--ok); }
+  .health.watch { color:var(--warn); } .health.watch .dot { background:var(--warn); }
+  .health.at_risk { color:var(--err); } .health.at_risk .dot { background:var(--err); }
+  .health.no_data { color:var(--muted); } .health.no_data .dot { background:var(--muted); }
+  .num { font-variant-numeric:tabular-nums; text-align:right; white-space:nowrap; }
+  .tag { display:inline-block; padding:0 0.45rem; border-radius:99px; font-size:0.7rem; background:color-mix(in srgb, var(--accent) 12%, transparent); color:var(--accent); margin-left:0.2rem; vertical-align:1px; }
+  .status { display:flex; gap:0.5rem; align-items:center; font-size:0.85rem; }
+  .status .dot { width:9px; height:9px; border-radius:50%; background:var(--muted); }
+  .status.ok .dot { background:var(--ok); } .status.bad .dot { background:var(--err); }
+  .steps { display:flex; gap:0.4rem; align-items:center; flex-wrap:wrap; font-size:0.8rem; color:var(--muted); margin:0.6rem 0 0.2rem; }
+  .steps b { color:var(--fg); }
+  .steps .arrow { opacity:0.5; }
+  dialog { border:1px solid var(--line); border-radius:12px; padding:0; background:var(--card); color:var(--fg); box-shadow:0 20px 60px rgba(0,0,0,0.25); }
+  dialog::backdrop { background:rgba(10,10,20,0.45); }
+  dialog.modal { width:min(760px, calc(100vw - 2rem)); max-height:calc(100vh - 3rem); overflow:hidden; }
+  dialog.slide { position:fixed; inset:0 0 0 auto; margin:0; height:100vh; max-height:100vh; width:min(820px, 100vw); border-radius:0; border-width:0 0 0 1px; transform:translateX(100%); transition:transform 0.22s ease; }
+  dialog.slide[open] { transform:none; }
+  @media (prefers-reduced-motion: reduce) { dialog.slide { transition:none; } }
+  .dlg { display:flex; flex-direction:column; }
+  dialog.modal .dlg { max-height:calc(100vh - 3rem); }
+  dialog.slide .dlg { height:100vh; }
+  .dlg header { display:flex; align-items:flex-start; justify-content:space-between; gap:1rem; padding:1rem 1.2rem 0.7rem; border-bottom:1px solid var(--line); }
+  .dlg header h2 { margin:0; font-size:1.05rem; }
+  .dlg header .who { color:var(--muted); font-size:0.8rem; margin-top:0.25rem; max-width:70ch; }
+  .dlg .body { padding:1rem 1.2rem; overflow:auto; flex:1 1 auto; min-height:0; }
+  .dlg footer { display:flex; gap:0.5rem; align-items:center; justify-content:flex-end; padding:0.7rem 1.2rem; border-top:1px solid var(--line); flex-wrap:wrap; }
+  .dlg footer .left { margin-right:auto; color:var(--muted); font-size:0.8rem; }
+  .x { background:transparent; border:none; color:var(--muted); font-size:1.3rem; line-height:1; cursor:pointer; padding:0.1rem 0.3rem; }
+  .field { display:grid; gap:0.25rem; margin-bottom:0.7rem; }
+  .field label { font-size:0.78rem; color:var(--muted); }
+  .field input, .field select, .field textarea { width:100%; }
+  .grid2 { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:0 1rem; }
+  .grid3 { display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:0 1rem; }
+  .note { border-radius:8px; padding:0.6rem 0.8rem; font-size:0.85rem; margin:0 0 0.8rem; background:color-mix(in srgb, var(--warn) 12%, transparent); color:var(--warn); }
+  .note.ok { background:color-mix(in srgb, var(--ok) 12%, transparent); color:var(--ok); }
+  .note.bad { background:color-mix(in srgb, var(--err) 12%, transparent); color:var(--err); }
+  .note.info { background:color-mix(in srgb, var(--accent) 10%, transparent); color:var(--fg); }
+  .tldpick { display:flex; gap:0.4rem; flex-wrap:wrap; }
+  .tldpick label { border:1px solid var(--line); border-radius:99px; padding:0.15rem 0.6rem; font-size:0.82rem; cursor:pointer; }
+  .tldpick label:has(input:checked) { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 12%, transparent); color:var(--accent); }
+  .tldpick input { display:none; }
+  tr.dim td { opacity:0.5; }
+  .reveal { filter: blur(4px); transition: filter 0.15s; } .reveal:hover { filter:none; }
+  h3.sect { font-size:0.9rem; margin:1.1rem 0 0.4rem; text-transform:uppercase; letter-spacing:0.04em; color:var(--muted); }
+  .empty { color:var(--muted); font-size:0.88rem; padding:0.6rem 0; }
+</style>
+
+<div class="pagehead">
+  <h1>Domains</h1>
+  <div class="row">
+    <button type="button" data-open="dlg-find" <%= nc.configured ? '' : 'disabled title="Connect Namecheap first"' %>>Find &amp; buy domains</button>
+    <button type="button" class="ghost" data-open="dlg-order" <%= pi.configured ? '' : 'disabled title="Connect Premium Inboxes first"' %>>Order mailboxes</button>
+    <form method="post" action="/ui/domains/import" style="display:inline"><input type="hidden" name="_csrf" value="<%= csrf %>"><button type="submit" class="ghost" title="Adopt the domains of connected mailboxes and import the Namecheap account's domains">Import domains</button></form>
+    <% if (pi.configured) { %><form method="post" action="/ui/domains/orders/sync" style="display:inline"><input type="hidden" name="_csrf" value="<%= csrf %>"><button type="submit" class="ghost">Check orders now</button></form><% } %>
+    <button type="button" class="ghost" data-open="dlg-integrations">Integrations</button>
+  </div>
+</div>
+<p class="muted" style="max-width:80ch; margin:0.2rem 0 0.4rem">From a brand word to warmed mailboxes: buy domains at Namecheap, order the mailboxes at Premium Inboxes, and follow each domain until every mailbox is connected here. Orders are checked every 10 minutes.</p>
+<div class="steps">
+  <span class="status <%= nc.configured ? (nc.lastError ? 'bad' : 'ok') : '' %>"><span class="dot"></span>Namecheap <%= nc.configured ? (nc.lastError ? 'error' : 'connected') : 'not connected' %></span>
+  <span class="arrow">·</span>
+  <span class="status <%= pi.configured ? (pi.lastError ? 'bad' : 'ok') : '' %>"><span class="dot"></span>Premium Inboxes <%= pi.configured ? (pi.lastError ? 'error' : 'connected') : 'not connected' %></span>
+  <% if (nc.lastError || pi.lastError) { %><span class="arrow">·</span><span style="color:var(--err)"><%= (nc.lastError || pi.lastError).slice(0, 120) %></span><% } %>
+</div>
+
+<div class="kpis">
+  <div class="kpi"><div class="n"><%= domains.length %></div><div class="l">domains</div><div class="muted" style="font-size:0.75rem"><%= counts.purchased %> purchased · <%= counts.ordered %> ordered · <%= counts.provisioned %> provisioned · <%= counts.connected %> connected</div></div>
+  <div class="kpi"><div class="n"><%= orders.length %></div><div class="l">orders</div><div class="muted" style="font-size:0.75rem"><%= orders.filter((o) => o.delivered === 0).length %> in progress</div></div>
+  <div class="kpi <%= deliveredTotal && connectedTotal < deliveredTotal ? 'warn' : deliveredTotal ? 'good' : '' %>"><div class="n"><%= connectedTotal %><small>/<%= deliveredTotal %></small></div><div class="l">mailboxes connected</div><div class="muted" style="font-size:0.75rem">of those delivered by orders</div></div>
+</div>
+
+<h2>Domains</h2>
+<form method="post" action="/ui/domains/orders" id="domain-form">
+<input type="hidden" name="_csrf" value="<%= csrf %>">
+<div class="card">
+  <% if (domains.length === 0) { %>
+    <p class="empty">No domains yet. Use <b>Find &amp; buy domains</b>, or <b>Import domains</b> to adopt the domains of the mailboxes already connected.</p>
+  <% } else { %>
+  <div style="overflow-x:auto">
+  <table>
+    <thead><tr><th></th><th>Domain</th><th>Step</th><th>Registrar</th><th>Expires</th><th title="SPF, DKIM, DMARC of the domain — capital = present">DNS</th><th class="num">Mailboxes</th><th>Order</th></tr></thead>
+    <tbody>
+    <% for (const d of domains) { %>
+    <tr class="<%= d.status === 'connected' ? 'dim' : '' %>">
+      <td><input type="checkbox" name="domains" value="<%= d.domain %>" class="dcheck" <%= d.status === 'purchased' ? '' : '' %>></td>
+      <td><b><%= d.domain %></b><% for (const tg of d.tags) { %><span class="tag"><%= tg %></span><% } %></td>
+      <td><span class="badge <%= stepClass(d.status) %>"><%= d.status %></span></td>
+      <td class="muted"><%= d.registrar %></td>
+      <td class="muted"><%= fmtDate(d.expiresAt) %></td>
+      <td><% const dv = d.dns.verdict; %><span class="health <%= dv === 'ok' ? 'healthy' : dv === 'warn' ? 'watch' : dv === 'bad' ? 'at_risk' : 'no_data' %>" title="<%= d.dns.issues.length ? d.dns.issues.join(' · ') : dv === 'unchecked' ? 'Checked once a mailbox on it is connected' : 'SPF, DKIM, DMARC present' %>"><span class="dot"></span><%= dv === 'unchecked' ? '…' : dv %></span></td>
+      <td class="num"><%= d.mailboxes.connected %><span class="muted">/<%= Math.max(d.mailboxes.delivered, d.mailboxes.connected) %></span></td>
+      <td class="muted"><% if (d.order) { %><button type="button" class="ghost" style="padding:0.15rem 0.5rem; font-size:0.75rem" data-open="dlg-order-<%= d.order.id %>"><%= d.order.status %></button><% } else { %>—<% } %></td>
+    </tr>
+    <% } %>
+    </tbody>
+  </table>
+  </div>
+  <p class="muted" style="margin:0.5rem 0 0">Tick domains, then <b>Order mailboxes</b> to order for exactly those.</p>
+  <% } %>
+</div>
+
+<h2>Orders</h2>
+<div class="card">
+  <% if (orders.length === 0) { %>
+    <p class="empty">No orders yet<%= pi.configured ? '' : '. Connect Premium Inboxes under Integrations to place one' %>.</p>
+  <% } else { %>
+  <table>
+    <thead><tr><th>Placed</th><th>Order</th><th>Status</th><th>Provider</th><th>Domains</th><th class="num">Mailboxes</th><th>Issues</th><th></th></tr></thead>
+    <tbody>
+    <% for (const o of orders) { const r = o.result; %>
+    <tr>
+      <td class="muted"><%= fmtDate(o.order.createdAt) %></td>
+      <td class="mono" style="font-size:0.78rem"><%= o.order.externalId || o.order.id %></td>
+      <td><span class="badge <%= o.delivered ? (o.connected === o.delivered ? 'active' : 'queued') : 'ramping' %>"><%= o.order.status %></span></td>
+      <td class="muted"><%= o.order.emailProvider %></td>
+      <td class="muted" style="max-width:34ch"><%= o.domains.join(', ') %></td>
+      <td class="num"><%= o.connected %><span class="muted">/<%= o.delivered || (r ? r.inboxes.total : '?') %></span></td>
+      <td class="muted" style="max-width:30ch"><%= r && r.issues.length ? r.issues.map((i) => i.reason).join(' · ') : '' %></td>
+      <td><button type="button" class="ghost" style="padding:0.2rem 0.6rem; font-size:0.78rem" data-open="dlg-order-<%= o.order.id %>">Mailboxes</button></td>
+    </tr>
+    <% } %>
+    </tbody>
+  </table>
+  <p class="muted" style="margin:0.5rem 0 0">Last checked: <%= fmtWhen(Math.max(0, ...orders.map((o) => o.order.lastCheckedAt || 0))) %></p>
+  <% } %>
+</div>
+
+<%# ---- order slide-over (inside the domain form so the ticked domains travel with it) ---- %>
+<dialog class="slide" id="dlg-order">
+  <div class="dlg">
+    <header><div><h2>Order mailboxes at Premium Inboxes</h2><div class="who" id="order-who">Tick domains in the table first, or pick them here.</div></div><button type="button" class="x" data-close aria-label="Close">×</button></header>
+    <div class="body">
+      <% if (!pi.configured) { %><div class="note bad">Premium Inboxes is not connected. Open Integrations first.</div><% } %>
+      <div class="note info">Premium Inboxes sets up the domains' DNS with the registrar login saved under Integrations, creates the mailboxes, and hands back addresses and passwords. The order asks them to connect each mailbox to this gateway through the onboarding link rather than to a sequencer; you can also do that yourself from the order's mailbox list.</div>
+      <h3 class="sect">Domains</h3>
+      <% if (orderable.length === 0 && domains.length === 0) { %><p class="empty">No purchased domains yet.</p><% } %>
+      <div id="order-domains" class="grid2" style="gap:0.2rem 1rem">
+        <% for (const d of domains) { %>
+        <label style="font-size:0.85rem; <%= d.status === 'purchased' ? '' : 'opacity:0.6' %>"><input type="checkbox" class="odom" data-domain="<%= d.domain %>" data-key="<%= key(d.domain) %>"> <%= d.domain %> <span class="muted">(<%= d.status %>)</span></label>
+        <% } %>
+      </div>
+      <h3 class="sect">Mailboxes</h3>
+      <div class="grid3">
+        <div class="field"><label>Provider</label><select name="emailProvider"><option value="google" <%= pi.defaults.emailProvider === 'Google' ? 'selected' : '' %>>Google Workspace</option><option value="microsoft" <%= pi.defaults.emailProvider === 'Microsoft' ? 'selected' : '' %>>Microsoft 365</option></select></div>
+        <div class="field"><label>Inboxes per domain</label><input type="number" name="inboxesPerDomain" min="1" max="10" value="<%= pi.defaults.inboxesPerDomain %>"></div>
+        <div class="field"><label>Address patterns</label><input name="prefixVariants" value="<%= (pi.defaults.prefixVariants || []).join(', ') %>" placeholder="first, first.last, f.last"></div>
+      </div>
+      <div class="grid3">
+        <div class="field"><label>Default first name</label><input name="defaultFirst" placeholder="Dennis"></div>
+        <div class="field"><label>Default last name</label><input name="defaultLast" placeholder="Jansen"></div>
+        <div class="field"><label>Mailbox password</label><input name="password" value="<%= suggestedPassword %>"></div>
+      </div>
+      <details style="margin:0.2rem 0 0.8rem"><summary class="muted" style="cursor:pointer">Different person per domain</summary>
+        <table style="margin-top:0.4rem" id="persona-table">
+          <thead><tr><th>Domain</th><th>First name</th><th>Last name</th></tr></thead>
+          <tbody>
+          <% for (const d of domains) { %>
+          <tr data-key="<%= key(d.domain) %>" hidden><td><%= d.domain %></td><td><input name="first_<%= key(d.domain) %>" placeholder="default"></td><td><input name="last_<%= key(d.domain) %>" placeholder="default"></td></tr>
+          <% } %>
+          </tbody>
+        </table>
+      </details>
+      <div class="grid2">
+        <div class="field"><label>Tag the domains</label><input name="tags" placeholder="batch-3, client-x"></div>
+        <div class="field"><label style="margin-top:1.2rem"><input type="checkbox" name="insured" value="1" <%= pi.defaults.insured ? 'checked' : '' %>> Insured order</label></div>
+      </div>
+      <div class="field"><label>Extra instructions for Premium Inboxes</label><textarea name="additionalInfo" rows="2" placeholder="Anything they should know"></textarea></div>
+    </div>
+    <footer>
+      <span class="left" id="order-summary"></span>
+      <button type="button" class="secondary" data-close>Cancel</button>
+      <button type="submit" id="order-submit" <%= pi.configured ? '' : 'disabled' %>>Place order</button>
+    </footer>
+  </div>
+</dialog>
+</form>
+
+<%# ---- find & buy slide-over ---- %>
+<dialog class="slide" id="dlg-find">
+  <div class="dlg">
+    <header><div><h2>Find &amp; buy domains</h2><div class="who">Suggestions are the brand word with the usual company prefixes and suffixes; availability and first-year prices come from Namecheap.</div></div><button type="button" class="x" data-close aria-label="Close">×</button></header>
+    <div class="body">
+      <% if (!nc.configured) { %><div class="note bad">Namecheap is not connected. Open Integrations first.</div><% } %>
+      <form method="post" action="/ui/domains/find" id="find-form">
+        <input type="hidden" name="_csrf" value="<%= csrf %>">
+        <div class="grid2">
+          <div class="field"><label>Brand word</label><input name="brand" value="<%= findInput.brand %>" placeholder="breazy" autocomplete="off"></div>
+          <div class="field"><label>Or check specific domains</label><input name="custom" value="<%= findInput.custom.replace(/\n/g, ', ') %>" placeholder="getbreazy.nl, trybreazy.com"></div>
+        </div>
+        <div class="field"><label>Endings</label>
+          <div class="tldpick"><% for (const t of ['com', 'nl', 'co', 'io', 'net', 'org', 'eu', 'de', 'be', 'agency']) { %><label><input type="checkbox" name="tlds" value="<%= t %>" <%= findInput.tlds.includes(t) ? 'checked' : '' %>>.<%= t %></label><% } %></div>
+        </div>
+        <button type="submit" class="secondary" <%= nc.configured ? '' : 'disabled' %>>Check availability</button>
+      </form>
+      <% if (candidates) { %>
+      <form method="post" action="/ui/domains/buy" id="buy-form" style="margin-top:1rem">
+        <input type="hidden" name="_csrf" value="<%= csrf %>">
+        <% const avail = candidates.filter((c) => c.available && !c.owned); %>
+        <div class="row" style="justify-content:space-between">
+          <b><%= avail.length %> of <%= candidates.length %> available</b>
+          <span><button type="button" class="secondary" style="padding:0.25rem 0.6rem; font-size:0.78rem" id="buy-all">Tick all available</button></span>
+        </div>
+        <table style="margin-top:0.4rem">
+          <thead><tr><th></th><th>Domain</th><th>Status</th><th class="num">Price / year</th></tr></thead>
+          <tbody>
+          <% for (const c of candidates) { %>
+          <tr class="<%= c.available && !c.owned ? '' : 'dim' %>">
+            <td><% if (c.available && !c.owned) { %><input type="checkbox" name="domains" value="<%= c.domain %>" class="bcheck" data-price="<%= c.price || 0 %>"><% } %></td>
+            <td><%= c.domain %></td>
+            <td class="muted"><%= c.owned ? 'yours' : c.available === null ? 'unknown' : c.available ? (c.premium ? 'available · premium' : 'available') : 'taken' %></td>
+            <td class="num"><%= c.price !== null ? c.price.toFixed(2) + ' ' + (c.currency || '') : '—' %></td>
+          </tr>
+          <% } %>
+          </tbody>
+        </table>
+        <div class="row" style="margin-top:0.7rem">
+          <input name="tags" placeholder="Tag the purchase, e.g. batch-3" style="min-width:220px">
+          <button type="submit" id="buy-submit">Buy selected</button>
+          <span class="muted" id="buy-summary">Nothing ticked.</span>
+        </div>
+      </form>
+      <% } %>
+    </div>
+    <footer><span class="left">Registered with WhoisGuard on, one year, using the contact under Integrations.</span><button type="button" class="secondary" data-close>Close</button></footer>
+  </div>
+</dialog>
+
+<%# ---- order detail modals ---- %>
+<% for (const o of orders) { const r = o.result; const emails = orderMailboxesById[o.order.id] || []; %>
+<dialog class="modal" id="dlg-order-<%= o.order.id %>">
+  <div class="dlg">
+    <header><div><h2>Order <%= o.order.externalId || o.order.id %></h2><div class="who"><%= o.order.status %> · <%= o.order.emailProvider %> · <%= o.domains.join(', ') %><% if (r && r.workspaceName) { %> · workspace <%= r.workspaceName %><% } %></div></div><button type="button" class="x" data-close aria-label="Close">×</button></header>
+    <div class="body">
+      <% if (r && r.issues.length) { %><div class="note bad"><b>Issues reported:</b> <%= r.issues.map((i) => i.reason).join(' · ') %></div><% } %>
+      <% if (emails.length === 0) { %>
+        <p class="empty">No mailboxes delivered yet<%= r ? ` (${r.inboxes.total} expected)` : '' %>. Checked every 10 minutes; use <b>Check orders now</b> to look sooner.</p>
+      <% } else { %>
+        <% const todo = emails.filter((e) => !e.connected); %>
+        <div class="note <%= todo.length ? '' : 'ok' %>"><%= emails.length - todo.length %> of <%= emails.length %> mailboxes connected to this gateway.<% if (todo.length) { %> The rest need one OAuth consent each: open the onboarding link signed in as the mailbox (address and password below), or hand this list to Premium Inboxes.<% } %></div>
+        <div class="row" style="margin:0 0 0.6rem"><input class="mono" readonly value="<%= hubLink %>" onclick="this.select()" style="flex:1"><a class="btn secondary" style="color:inherit" href="<%= hubLink %>" target="_blank" rel="noopener">Open</a></div>
+        <table>
+          <thead><tr><th>Mailbox</th><th>Name</th><th>Password</th><th>Status</th></tr></thead>
+          <tbody>
+          <% for (const e of emails) { %>
+          <tr><td><%= e.email %></td><td class="muted"><%= [e.firstName, e.lastName].filter(Boolean).join(' ') %></td><td><code class="reveal" title="hover to reveal"><%= e.password %></code></td><td><% if (e.connected) { %><span class="badge active">connected</span><% } else { %><span class="badge queued"><%= e.status || 'delivered' %></span><% } %></td></tr>
+          <% } %>
+          </tbody>
+        </table>
+        <% if (todo.length) { %>
+        <details style="margin-top:0.7rem"><summary class="muted" style="cursor:pointer">Checklist to hand over</summary>
+          <textarea readonly rows="6" style="width:100%; margin-top:0.4rem" onclick="this.select()">Connect these mailboxes at <%= hubLink %> (sign in as the mailbox, accept access):
+<% for (const e of todo) { %><%= e.email %> / <%= e.password %>
+<% } %></textarea>
+        </details>
+        <% } %>
+      <% } %>
+    </div>
+    <footer><span class="left">Placed <%= fmtWhen(o.order.createdAt) %> · last checked <%= fmtWhen(o.order.lastCheckedAt) %></span><button type="button" class="secondary" data-close>Close</button></footer>
+  </div>
+</dialog>
+<% } %>
+
+<%# ---- integrations slide-over ---- %>
+<dialog class="slide" id="dlg-integrations">
+  <div class="dlg">
+    <header><div><h2>Integrations</h2><div class="who">Credentials are stored encrypted with the instance master key and only ever used server-side.</div></div><button type="button" class="x" data-close aria-label="Close">×</button></header>
+    <div class="body">
+      <h3 class="sect">Namecheap <span class="status <%= nc.configured ? (nc.lastError ? 'bad' : 'ok') : '' %>" style="display:inline-flex; margin-left:0.5rem; text-transform:none; letter-spacing:0"><span class="dot"></span><%= nc.configured ? (nc.verifiedAt ? 'verified ' + fmtWhen(nc.verifiedAt) : 'saved, not verified') : 'not connected' %></span></h3>
+      <% if (nc.lastError) { %><div class="note bad"><%= nc.lastError %></div><% } %>
+      <form method="post" action="/ui/integrations/namecheap">
+        <input type="hidden" name="_csrf" value="<%= csrf %>">
+        <p class="muted" style="margin:0 0 0.6rem">Enable API access in the Namecheap profile (Tools → API access), whitelist this server's public IP, and paste the key. Registration needs a registrant contact; the same contact is used for every role, with WhoisGuard on.</p>
+        <div class="grid3">
+          <div class="field"><label>API user</label><input name="apiUser" value="<%= nc.apiUser %>" required></div>
+          <div class="field"><label>API key <%= nc.configured ? '(leave blank to keep ' + nc.apiKeyMasked + ')' : '' %></label><input name="apiKey" placeholder="<%= nc.configured ? nc.apiKeyMasked : '' %>" autocomplete="off"></div>
+          <div class="field"><label>Whitelisted client IP</label><input name="clientIp" value="<%= nc.clientIp %>" placeholder="this server's public IPv4" required></div>
+        </div>
+        <div class="grid3">
+          <div class="field"><label>Username (if different)</label><input name="username" value="<%= nc.username %>"></div>
+          <div class="field"><label style="margin-top:1.2rem"><input type="checkbox" name="sandbox" value="1" <%= nc.sandbox ? 'checked' : '' %>> Use the sandbox API</label></div>
+        </div>
+        <% const c = nc.contact || {}; %>
+        <div class="grid3">
+          <div class="field"><label>First name</label><input name="c_firstName" value="<%= c.firstName || '' %>"></div>
+          <div class="field"><label>Last name</label><input name="c_lastName" value="<%= c.lastName || '' %>"></div>
+          <div class="field"><label>Organization</label><input name="c_organization" value="<%= c.organization || '' %>"></div>
+          <div class="field"><label>Address</label><input name="c_address1" value="<%= c.address1 || '' %>"></div>
+          <div class="field"><label>City</label><input name="c_city" value="<%= c.city || '' %>"></div>
+          <div class="field"><label>State / province</label><input name="c_stateProvince" value="<%= c.stateProvince || '' %>" placeholder="NH"></div>
+          <div class="field"><label>Postal code</label><input name="c_postalCode" value="<%= c.postalCode || '' %>"></div>
+          <div class="field"><label>Country (2 letters)</label><input name="c_country" value="<%= c.country || 'NL' %>" maxlength="2"></div>
+          <div class="field"><label>Phone (+CC.number)</label><input name="c_phone" value="<%= c.phone || '' %>" placeholder="+31.612345678"></div>
+          <div class="field"><label>Email</label><input name="c_email" value="<%= c.email || '' %>"></div>
+        </div>
+        <div class="row">
+          <button type="submit">Save &amp; test</button>
+          <% if (nc.configured) { %><button type="submit" name="delete" value="1" class="secondary" data-confirm="Disconnect Namecheap from this workspace?">Disconnect</button><% } %>
+        </div>
+      </form>
+
+      <h3 class="sect" style="margin-top:1.6rem">Premium Inboxes <span class="status <%= pi.configured ? (pi.lastError ? 'bad' : 'ok') : '' %>" style="display:inline-flex; margin-left:0.5rem; text-transform:none; letter-spacing:0"><span class="dot"></span><%= pi.configured ? (pi.verifiedAt ? 'verified ' + fmtWhen(pi.verifiedAt) : 'saved, not verified') : 'not connected' %></span></h3>
+      <% if (pi.lastError) { %><div class="note bad"><%= pi.lastError %></div><% } %>
+      <form method="post" action="/ui/integrations/premiuminboxes">
+        <input type="hidden" name="_csrf" value="<%= csrf %>">
+        <p class="muted" style="margin:0 0 0.6rem">Generate the token in the Premium Inboxes portal under Settings → API Token. The hosting login is what their team uses to set the domains' DNS; use a registrar account that holds only cold-email domains.</p>
+        <div class="grid2">
+          <div class="field"><label>API token <%= pi.configured ? '(leave blank to keep ' + pi.tokenMasked + ')' : '' %></label><input name="apiToken" placeholder="<%= pi.configured ? pi.tokenMasked : '' %>" autocomplete="off"></div>
+          <div class="field"><label>Workspace for orders</label>
+            <% if (pi.knownWorkspaces.length) { %><select name="workspaceId"><option value="">Agency default</option><% for (const w of pi.knownWorkspaces) { %><option value="<%= w.id %>" <%= pi.workspaceId === w.id ? 'selected' : '' %>><%= w.name %></option><% } %></select>
+            <% } else { %><input name="workspaceId" value="<%= pi.workspaceId || '' %>" placeholder="optional; the list appears after the first save"><% } %>
+          </div>
+        </div>
+        <div class="grid3">
+          <div class="field"><label>DNS / hosting platform</label><select name="h_platform"><% for (const p of ['Namecheap', 'Cloudflare', 'GoDaddy', 'Porkbun']) { %><option <%= pi.hosting.platform === p ? 'selected' : '' %>><%= p %></option><% } %></select></div>
+          <div class="field"><label>Hosting username</label><input name="h_username" value="<%= pi.hosting.username || '' %>"></div>
+          <div class="field"><label>Hosting password <%= pi.hosting.password ? '(set)' : '' %></label><input name="h_password" placeholder="<%= pi.hosting.password || '' %>" autocomplete="off"></div>
+          <div class="field"><label>Namecheap backup codes <%= pi.hosting.namecheapBackupCodes ? '(set)' : '' %></label><input name="h_backupCodes" placeholder="required by them for Namecheap"></div>
+          <div class="field"><label>GoDaddy account name</label><input name="h_goDaddyAccountName" value="<%= pi.hosting.goDaddyAccountName || '' %>"></div>
+        </div>
+        <h4 style="margin:0.4rem 0; font-size:0.85rem">Order defaults</h4>
+        <div class="grid3">
+          <div class="field"><label>Provider</label><select name="d_emailProvider"><option <%= pi.defaults.emailProvider === 'Google' ? 'selected' : '' %>>Google</option><option <%= pi.defaults.emailProvider === 'Microsoft' ? 'selected' : '' %>>Microsoft</option></select></div>
+          <div class="field"><label>Inboxes per domain</label><input type="number" name="d_inboxesPerDomain" min="1" max="10" value="<%= pi.defaults.inboxesPerDomain %>"></div>
+          <div class="field"><label>Address patterns</label><input name="d_prefixVariants" value="<%= (pi.defaults.prefixVariants || []).join(', ') %>"></div>
+          <div class="field"><label>Profile picture URL</label><input name="d_profilePictureLink" value="<%= pi.defaults.profilePictureLink || '' %>"></div>
+          <div class="field"><label>Master inbox (forwarding)</label><input name="d_masterInboxEmail" value="<%= pi.defaults.masterInboxEmail || '' %>"></div>
+          <div class="field"><label style="margin-top:1.2rem"><input type="checkbox" name="d_insured" value="1" <%= pi.defaults.insured ? 'checked' : '' %>> Insured by default</label></div>
+        </div>
+        <div class="row">
+          <button type="submit">Save &amp; test</button>
+          <% if (pi.configured) { %><button type="submit" formaction="/ui/integrations/premiuminboxes/test" class="secondary">Test token</button><button type="submit" name="delete" value="1" class="secondary" data-confirm="Disconnect Premium Inboxes from this workspace?">Disconnect</button><% } %>
+        </div>
+      </form>
+    </div>
+    <footer><button type="button" class="secondary" data-close>Close</button></footer>
+  </div>
+</dialog>
+
+<script>
+(function () {
+  document.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => { const d = document.getElementById(b.dataset.open); if (d) { if (b.dataset.open === 'dlg-order') syncOrderPanel(true); d.showModal(); } }));
+  document.querySelectorAll('dialog').forEach((d) => {
+    d.querySelectorAll('[data-close]').forEach((c) => c.addEventListener('click', () => d.close()));
+    d.addEventListener('click', (e) => { if (e.target === d) d.close(); });
+  });
+  document.querySelectorAll('[data-confirm]').forEach((el) => el.addEventListener('click', (e) => { if (!confirm(el.dataset.confirm)) { e.preventDefault(); e.stopImmediatePropagation(); } }));
+  const panel = <%- JSON.stringify(panel || '') %>;
+  if (panel) { const d = document.getElementById('dlg-' + panel); if (d) { if (panel === 'order') syncOrderPanel(true); d.showModal(); } }
+
+  // Order panel: mirror the table's ticks into the panel's checkboxes and back.
+  const tableChecks = Array.from(document.querySelectorAll('.dcheck'));
+  const panelChecks = Array.from(document.querySelectorAll('.odom'));
+  function syncOrderPanel(fromTable) {
+    if (fromTable) for (const p of panelChecks) { const t = tableChecks.find((c) => c.value === p.dataset.domain); if (t) p.checked = t.checked; }
+    else for (const p of panelChecks) { const t = tableChecks.find((c) => c.value === p.dataset.domain); if (t) t.checked = p.checked; }
+    const chosen = panelChecks.filter((p) => p.checked);
+    document.querySelectorAll('#persona-table tr[data-key]').forEach((tr) => { tr.hidden = !chosen.some((p) => p.dataset.key === tr.dataset.key); });
+    const per = Number(document.querySelector('[name=inboxesPerDomain]')?.value || 1);
+    const who = document.getElementById('order-who');
+    const sum = document.getElementById('order-summary');
+    if (who) who.textContent = chosen.length ? chosen.length + ' domain' + (chosen.length === 1 ? '' : 's') + ': ' + chosen.slice(0, 4).map((p) => p.dataset.domain).join(', ') + (chosen.length > 4 ? ' and ' + (chosen.length - 4) + ' more' : '') : 'Tick domains in the table first, or pick them here.';
+    if (sum) sum.textContent = chosen.length ? chosen.length * per + ' mailboxes across ' + chosen.length + ' domain' + (chosen.length === 1 ? '' : 's') : '';
+    const submit = document.getElementById('order-submit');
+    if (submit && !submit.hasAttribute('data-locked')) submit.disabled = chosen.length === 0;
+  }
+  if (document.getElementById('order-submit') && document.getElementById('order-submit').disabled) document.getElementById('order-submit').setAttribute('data-locked', '1');
+  panelChecks.forEach((p) => p.addEventListener('change', () => syncOrderPanel(false)));
+  tableChecks.forEach((t) => t.addEventListener('change', () => syncOrderPanel(true)));
+  const perInput = document.querySelector('[name=inboxesPerDomain]');
+  if (perInput) perInput.addEventListener('input', () => syncOrderPanel(true));
+  const domainForm = document.getElementById('domain-form');
+  if (domainForm) domainForm.addEventListener('submit', (e) => {
+    const n = tableChecks.filter((c) => c.checked).length;
+    const per = Number(document.querySelector('[name=inboxesPerDomain]')?.value || 1);
+    if (n === 0) { e.preventDefault(); alert('Tick at least one domain.'); return; }
+    if (!confirm('Place an order at Premium Inboxes for ' + n * per + ' mailboxes on ' + n + ' domain(s)? This is billed by them.')) e.preventDefault();
+  });
+
+  // Buy form: running total and confirmation.
+  const buyForm = document.getElementById('buy-form');
+  if (buyForm) {
+    const checks = Array.from(buyForm.querySelectorAll('.bcheck'));
+    const summary = document.getElementById('buy-summary');
+    const update = () => {
+      const on = checks.filter((c) => c.checked);
+      const total = on.reduce((n, c) => n + Number(c.dataset.price || 0), 0);
+      summary.textContent = on.length ? on.length + ' domain' + (on.length === 1 ? '' : 's') + ', about ' + total.toFixed(2) + ' a year' : 'Nothing ticked.';
+    };
+    checks.forEach((c) => c.addEventListener('change', update));
+    document.getElementById('buy-all').addEventListener('click', () => { checks.forEach((c) => { c.checked = true; }); update(); });
+    buyForm.addEventListener('submit', (e) => {
+      const on = checks.filter((c) => c.checked);
+      if (on.length === 0) { e.preventDefault(); alert('Tick at least one available domain.'); return; }
+      const total = on.reduce((n, c) => n + Number(c.dataset.price || 0), 0);
+      if (!confirm('Register ' + on.length + ' domain(s) at Namecheap for about ' + total.toFixed(2) + '? This charges the Namecheap account.')) e.preventDefault();
+    });
+    update();
+  }
+  syncOrderPanel(true);
+})();
+</script>
+<%- include('_footer') %>

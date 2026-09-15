@@ -36,6 +36,7 @@ import { startWebhookWorker } from './inbound/webhooks.js';
 import { startWarmupEngine } from './warmup/index.js';
 import { registerWarmupRoutes } from './warmup/api.js';
 import { startLeaderLoop, INSTANCE_ID, isLeader, currentHolder } from './cluster/lease.js';
+import { startOrderSync } from './domains/orders-worker.js';
 import { imapConnectionCount, destroyImapConnections } from './imap/server.js';
 import { sqlite } from './db/index.js';
 
@@ -139,6 +140,7 @@ async function main() {
         startActivityPruner(),
         startHealthReporter(),
         startWarmupEngine(),
+        startOrderSync(),
       ];
       stopWorkers = () => {
         for (const stop of stops.reverse()) {
