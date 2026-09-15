@@ -138,7 +138,10 @@
   <% if (overview.accounts.length > 0) { %>
   <div style="margin-top:1rem">
     <strong>Connect to your sequencer</strong>
-    <p class="muted" style="margin:0.25rem 0 0.5rem">A bulk-import CSV with each mailbox's proxy SMTP + IMAP credentials, pre-formatted for your tool:</p>
+    <p class="muted" style="margin:0.25rem 0 0.5rem">A bulk-import CSV of <em>every</em> mailbox with its proxy SMTP + IMAP credentials, pre-formatted for your tool. To export only some, select them in the table and use Export.</p>
+    <% if (missingNames.length) { %>
+    <div class="alert error" style="margin:0.4rem 0 0.6rem"><%= missingNames.length %> mailbox<%= missingNames.length === 1 ? ' has' : 'es have' %> no full name on file, and Instantly rejects rows without a first and last name: <%= missingNames.slice(0, 6).map((m) => m.email).join(', ') %><%= missingNames.length > 6 ? ` and ${missingNames.length - 6} more` : '' %>. Select them and use Export → "Fetch names from the provider", or set the name on the account page.</div>
+    <% } %>
     <div class="row">
       <% for (const [format, label] of Object.entries(sequencers)) { %>
         <a class="btn <%= format === 'generic' ? 'secondary' : '' %>" style="<%= format === 'generic' ? 'color:inherit' : '' %>" href="/ui/accounts.csv?format=<%= format %>">⬇ <%= label %></a>
@@ -221,6 +224,7 @@
         <button type="button" class="secondary" data-panel="details">Details &amp; chart</button>
         <button type="button" class="secondary" data-panel="tags">Tags</button>
         <button type="button" class="secondary" data-panel="settings">Settings</button>
+        <button type="button" class="secondary" data-panel="export">Export</button>
       </div>
     </div>
 
@@ -245,6 +249,20 @@
           <input name="tags_add" list="taglist" placeholder="Add tags, comma separated (e.g. campaign-a, q4)" style="min-width:320px" autocomplete="off">
           <datalist id="taglist"><% for (const tg of tags) { %><option value="<%= tg.tag %>"><% } %></datalist>
           <button type="submit" name="action" value="tags">Save tags</button>
+        </div>
+      </section>
+      <section id="panel-export" hidden>
+        <h3>Export the selected mailboxes to a sequencer</h3>
+        <p class="muted" style="margin:0 0 0.6rem">A bulk-import CSV with each selected mailbox's proxy SMTP + IMAP credentials, name and address, laid out for the tool. Mailboxes without a credential get one generated.</p>
+        <div class="row">
+          <% for (const [format, label] of Object.entries(sequencers)) { %>
+            <button type="submit" formaction="/ui/accounts.csv" name="format" value="<%= format %>" class="<%= format === 'generic' ? 'secondary' : '' %>">⬇ <%= label %></button>
+          <% } %>
+        </div>
+        <div id="sel-names" class="muted" style="margin-top:0.7rem"></div>
+        <div class="row" style="margin-top:0.5rem">
+          <button type="submit" name="action" value="refresh_profile" class="secondary">Fetch names from the provider</button>
+          <span class="muted">Reads the send-as name from Gmail or the directory entry from Microsoft 365 and stores it. Instantly requires both a first and a last name.</span>
         </div>
       </section>
       <section id="panel-settings" hidden>
@@ -448,9 +466,16 @@
     const list = ids.map((id) => byId.get(id)).filter(Boolean);
     const shown = list.slice(0, 6).map((a) => esc(a.email)).join(', ');
     document.getElementById('sel-who').innerHTML = '<b>' + list.length + ' selected</b> · ' + shown + (list.length > 6 ? ' and ' + (list.length - 6) + ' more' : '');
-    for (const name of ['details', 'tags', 'settings']) document.getElementById('panel-' + name).hidden = name !== activePanel;
+    for (const name of ['details', 'tags', 'settings', 'export']) document.getElementById('panel-' + name).hidden = name !== activePanel;
     if (activePanel === 'details') renderDetails(list);
     if (activePanel === 'tags') renderTags(list);
+    if (activePanel === 'export') {
+      const missing = list.filter((a) => !a.firstName || !a.lastName);
+      const derived = list.filter((a) => a.firstName && a.lastName && a.namesSource === 'derived');
+      document.getElementById('sel-names').innerHTML =
+        (missing.length ? '<span style="color:var(--err)">' + missing.length + ' of the selected have no full name: ' + esc(missing.slice(0, 5).map((a) => a.email).join(', ')) + (missing.length > 5 ? ' and ' + (missing.length - 5) + ' more' : '') + '.</span> ' : 'Every selected mailbox has a first and last name. ') +
+        (derived.length ? '<span>' + derived.length + ' name' + (derived.length === 1 ? ' is' : 's are') + ' guessed from the address (e.g. ' + esc(derived[0].email) + ' → ' + esc(derived[0].firstName + ' ' + derived[0].lastName) + '); fetch the real ones below.</span>' : '');
+    }
   }
 
   function renderDetails(list) {
@@ -603,7 +628,7 @@
 
   document.getElementById('bulk').addEventListener('submit', (e) => {
     const submitter = e.submitter;
-    if (!submitter || submitter.name !== 'action') return;
+    if (!submitter || (submitter.name !== 'action' && submitter.name !== 'format')) return;
     const n = selectedIds().length;
     if (n === 0) { e.preventDefault(); alert('Select at least one mailbox first (tick rows, or use "Select shown").'); return; }
     if (submitter.value === 'disable' && !confirm('Disable warmup for ' + n + ' mailbox(es)? Pending conversations are dropped; history is kept.')) e.preventDefault();

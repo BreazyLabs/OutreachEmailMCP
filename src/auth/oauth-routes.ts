@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply } from 'fastify';
+import { refreshAccountProfile } from '../accounts/profile.js';
 import { nanoid } from 'nanoid';
 import { and, desc, eq } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
@@ -370,6 +371,14 @@ export function registerOauthRoutes(app: FastifyInstance) {
           .run();
       } catch (err) {
         logger.warn({ accountId, err: String(err) }, 'failed to anchor sync cursor');
+      }
+
+      // The consent flow only proves the address; the name comes from the
+      // mailbox settings (Gmail send-as) or the directory (Graph).
+      try {
+        await refreshAccountProfile(accountId);
+      } catch (err) {
+        logger.warn({ accountId, err: String(err) }, 'could not fetch the mailbox owner name');
       }
 
       logger.info({ provider, email: profile.email, accountId }, 'account connected');

@@ -83,7 +83,7 @@ Tokens are HMAC-signed with `MASTER_KEY` and stateless — no rows, no shared se
 
 ## Connect to your sequencer (CSV export)
 
-The dashboard's **Connect to your sequencer** section downloads a bulk-import CSV with each account's proxy SMTP + IMAP credentials, pre-formatted for the target tool: **Instantly, Smartlead, Lemlist, Reply.io, Woodpecker**, or a generic layout. Same thing over the API:
+The Mailboxes page downloads a bulk-import CSV with each account's proxy SMTP + IMAP credentials, pre-formatted for the target tool: **Instantly, Smartlead, Lemlist, Reply.io, Woodpecker**, or a generic layout — for the whole workspace from the onboarding section, or for any selection of mailboxes from the selection panel's Export tab. Rows carry the owner's **first and last name** (Instantly refuses rows without both): the proxy stores them from the provider when a mailbox connects (the Gmail send-as name, or the Microsoft 365 directory entry), you can fetch them again for any selection or set them by hand on the account page, and a mailbox with nothing on file gets a guess from its address. Same thing over the API (`?tag=` or `?accountIds=a,b` limit the export; `POST /api/v1/accounts/refresh-profile` re-fetches names):
 
 ```bash
 curl -H "Authorization: Bearer $KEY" "localhost:3000/api/v1/accounts/export.csv?format=instantly"

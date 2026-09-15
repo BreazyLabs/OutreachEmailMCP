@@ -19,6 +19,7 @@ import { domainHealthFor, domainOfEmail, dnsVerdict, issuesOf } from './dns-heal
 import type { Persona } from './content/persona.js';
 import type { Account, Org, WarmupAccount } from '../db/schema.js';
 import { parseTags } from '../accounts/tags.js';
+import { namesFor } from '../accounts/profile.js';
 
 export interface AccountWarmupSummary {
   accountId: string;
@@ -26,6 +27,7 @@ export interface AccountWarmupSummary {
   provider: string;
   accountStatus: string;
   tags: string[];
+  names: { firstName: string; lastName: string; source: 'account' | 'derived' };
   enabled: boolean;
   state: WarmupAccount['state'];
   rampDay: number;
@@ -85,6 +87,7 @@ export function summarizeAccount(account: Account, org: Org, warm: WarmupAccount
     provider: account.provider,
     accountStatus: account.status,
     tags: parseTags(account.tagsJson),
+    names: (() => { const n = namesFor(account); return { firstName: n.firstName, lastName: n.lastName, source: n.source }; })(),
     dns: {
       verdict: dnsVerdict(dnsRow),
       issues: issuesOf(dnsRow),

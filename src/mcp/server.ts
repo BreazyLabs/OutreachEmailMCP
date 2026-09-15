@@ -404,9 +404,13 @@ export function buildMcpServer(auth: McpAuth): McpServer {
   if (can('export')) {
     server.tool(
       'export_sequencer_csv',
-      `Export all connected accounts as a CSV with proxy SMTP+IMAP credentials, formatted for a sequencer's bulk-import. Formats: ${SEQUENCER_FORMATS.join(', ')}.`,
-      { format: z.enum(SEQUENCER_FORMATS as [string, ...string[]]).optional() },
-      async ({ format }) => text(buildAccountsCsv(auth.orgId, format ?? 'generic')),
+      `Export connected accounts as a CSV with proxy SMTP+IMAP credentials, formatted for a sequencer's bulk-import. Formats: ${SEQUENCER_FORMATS.join(', ')}. Optionally limit to a tag or a list of account ids.`,
+      {
+        format: z.enum(SEQUENCER_FORMATS as [string, ...string[]]).optional(),
+        tag: z.string().optional(),
+        accountIds: z.array(z.string()).optional(),
+      },
+      async ({ format, tag, accountIds }) => text(buildAccountsCsv(auth.orgId, format ?? 'generic', { tag, accountIds })),
     );
   }
 

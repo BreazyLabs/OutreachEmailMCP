@@ -48,6 +48,7 @@ import { healthOf, HEALTH_LABELS } from '../warmup/health.js';
 import { placementChartSvg, CHART_LEGEND } from './charts.js';
 import { mailboxesPageLocals } from './warmup-routes.js';
 import { parseTags } from '../accounts/tags.js';
+import { namesFor, setAccountNames, refreshAccountProfile } from '../accounts/profile.js';
 import { WARMUP_FIELDS, resolveWarmupSettings } from '../warmup/settings.js';
 import { config as appConfig } from '../config.js';
 
@@ -168,7 +169,6 @@ export function registerUiRoutes(app: FastifyInstance) {
         google: config.googleEnabled ? createConnectLink('google', orgId) : null,
         microsoft: config.microsoftEnabled ? createConnectLink('microsoft', orgId) : null,
       },
-      sequencers: SEQUENCER_LABELS,
     });
   });
 
@@ -223,6 +223,7 @@ export function registerUiRoutes(app: FastifyInstance) {
       warmup,
       warmupHealth: healthOf(warmup.summary),
       accountTags: parseTags(account.tagsJson),
+      accountNames: namesFor(account),
       healthLabels: HEALTH_LABELS,
       warmupChart: warmup.summary.enabled ? placementChartSvg(warmup.daily, 30) : null,
       chartLegend: CHART_LEGEND,
@@ -277,20 +278,60 @@ export function registerUiRoutes(app: FastifyInstance) {
     },
   );
 
-  // CSV of all accounts with their proxy SMTP settings (creates credentials
-  // for accounts that lack one).
-  app.get<{ Querystring: { format?: string } }>('/ui/accounts.csv', async (req, reply) => {
+  // CSV of accounts with their proxy SMTP settings (creates credentials for
+  // accounts that lack one). GET exports the workspace (optionally one tag);
+  // POST exports the mailboxes selected on the Mailboxes page.
+  const sendCsv = (reply: FastifyReply, orgId: string, format: string, filter: { accountIds?: string[]; tag?: string }) =>
+    reply
+      .type('text/csv; charset=utf-8')
+      .header('Content-Disposition', `attachment; filename="outreachemailmcp-${format}-accounts.csv"`)
+      .send(buildAccountsCsv(orgId, format, filter));
+  app.get<{ Querystring: { format?: string; tag?: string } }>('/ui/accounts.csv', async (req, reply) => {
     const session = guard(req, reply);
     if (!session) return;
-    const format = req.query.format ?? 'generic';
-    return reply
-      .type('text/csv; charset=utf-8')
-      .header(
-        'Content-Disposition',
-        `attachment; filename="outreachemailmcp-${format}-accounts.csv"`,
-      )
-      .send(buildAccountsCsv(session.org.id, format));
+    return sendCsv(reply, session.org.id, req.query.format ?? 'generic', { tag: req.query.tag });
   });
+  app.post<{ Body: { format?: string; accountIds?: string | string[] } }>('/ui/accounts.csv', async (req, reply) => {
+    const session = guardPost(req, reply);
+    if (!session) return;
+    const raw = req.body?.accountIds;
+    const accountIds = raw === undefined ? [] : Array.isArray(raw) ? raw.map(String) : [String(raw)];
+    if (accountIds.length === 0) return reply.redirect('/ui?error=' + encodeURIComponent('Select at least one mailbox to export.'));
+    return sendCsv(reply, session.org.id, String(req.body?.format ?? 'generic'), { accountIds });
+  });
+
+  // Names used by sequencer exports: set by hand, or fetched from the provider.
+  app.post<{ Params: { accountId: string }; Body: { firstName?: string; lastName?: string; displayName?: string; refresh?: string } }>(
+    '/ui/accounts/:accountId/profile',
+    async (req, reply) => {
+      const session = guardPost(req, reply);
+      if (!session) return;
+      const account = db
+        .select()
+        .from(schema.accounts)
+        .where(and(eq(schema.accounts.id, req.params.accountId), eq(schema.accounts.orgId, session.org.id)))
+        .get();
+      if (!account) return reply.code(404).send('Unknown account');
+      const back = `/ui/accounts/${account.id}`;
+      if (req.body?.refresh) {
+        try {
+          const r = await refreshAccountProfile(account.id);
+          return reply.redirect(
+            `${back}?notice=` +
+              encodeURIComponent(r ? `Provider name: ${[r.firstName, r.lastName].filter(Boolean).join(' ') || r.displayName}.` : 'The provider has no name on file for this mailbox; set one below.'),
+          );
+        } catch (err) {
+          return reply.redirect(`${back}?error=` + encodeURIComponent(`Could not fetch the name: ${String(err).slice(0, 200)}`));
+        }
+      }
+      setAccountNames(account.id, {
+        firstName: String(req.body?.firstName ?? ''),
+        lastName: String(req.body?.lastName ?? ''),
+        displayName: String(req.body?.displayName ?? ''),
+      });
+      return reply.redirect(`${back}?notice=` + encodeURIComponent('Name saved.'));
+    },
+  );
 
   app.post<{ Params: { credentialId: string } }>(
     '/ui/smtp-credentials/:credentialId/revoke',

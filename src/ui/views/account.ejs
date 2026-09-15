@@ -5,7 +5,18 @@
   <%= account.provider %> · account id <code><%= account.id %></code>
   <% if (account.lastError) { %> · last error: <%= account.lastError %><% } %>
 </p>
-<form method="post" action="/ui/accounts/<%= account.id %>/warmup/tags" class="row" style="margin:-0.3rem 0 0.8rem">
+<% const an = typeof accountNames !== 'undefined' ? accountNames : { firstName: '', lastName: '', displayName: '', source: 'derived' }; %>
+<form method="post" action="/ui/accounts/<%= account.id %>/profile" class="row" style="margin:-0.3rem 0 0.4rem">
+  <input type="hidden" name="_csrf" value="<%= csrf %>">
+  <label class="muted">Name</label>
+  <input name="firstName" value="<%= account.firstName || '' %>" placeholder="First name<%= an.source === 'derived' && an.firstName ? ' (guess: ' + an.firstName + ')' : '' %>" style="width:170px">
+  <input name="lastName" value="<%= account.lastName || '' %>" placeholder="Last name<%= an.source === 'derived' && an.lastName ? ' (guess: ' + an.lastName + ')' : '' %>" style="width:170px">
+  <input name="displayName" value="<%= account.displayName || '' %>" placeholder="Display name" style="width:200px">
+  <button type="submit" class="secondary">Save name</button>
+  <button type="submit" name="refresh" value="1" class="secondary" title="Read the send-as name from Gmail or the directory entry from Microsoft 365">Fetch from provider</button>
+  <span class="muted">Used in sequencer exports; Instantly needs both names.<%= an.source === 'derived' ? ' Nothing stored yet: the export would use the guess shown in the placeholders.' : '' %></span>
+</form>
+<form method="post" action="/ui/accounts/<%= account.id %>/warmup/tags" class="row" style="margin:0 0 0.8rem">
   <input type="hidden" name="_csrf" value="<%= csrf %>">
   <label class="muted" for="tags">Tags</label>
   <input id="tags" name="tags" value="<%= (typeof accountTags !== 'undefined' ? accountTags : []).join(', ') %>" placeholder="campaign-a, client-x (comma separated)" style="min-width:320px">

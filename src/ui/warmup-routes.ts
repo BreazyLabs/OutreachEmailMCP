@@ -28,6 +28,8 @@ import { placementChartSvg, sparklineSvg, CHART_LEGEND } from './charts.js';
 import { refreshDomainHealth } from '../warmup/dns-health.js';
 import { logActivity } from '../observability/activity.js';
 import { orgTagCounts, splitTagInput, setAccountTags } from '../accounts/tags.js';
+import { accountsMissingNames, refreshAccountProfiles } from '../accounts/profile.js';
+import { SEQUENCER_LABELS } from '../export/accounts-csv.js';
 import type { SessionContext } from './session.js';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
@@ -56,6 +58,8 @@ export function mailboxesPageLocals(req: FastifyRequest, session: SessionContext
     sparks,
     domains,
     tags: orgTagCounts(session.org.id),
+    missingNames: accountsMissingNames(session.org.id),
+    sequencers: SEQUENCER_LABELS,
     chart: placementChartSvg(overview.daily, 30),
     chartLegend: CHART_LEGEND,
     fields: WARMUP_FIELDS,
@@ -74,6 +78,9 @@ export function mailboxesPageLocals(req: FastifyRequest, session: SessionContext
         provider: a.provider,
         status: a.accountStatus,
         tags: a.tags,
+        firstName: a.names.firstName,
+        lastName: a.names.lastName,
+        namesSource: a.names.source,
         enabled: a.enabled,
         state: a.state,
         health: health[a.accountId],
@@ -151,6 +158,16 @@ export function registerWarmupUiRoutes(app: FastifyInstance): void {
       return reply.redirect(back('error', 'Select at least one mailbox first.'));
     }
     const action = String(body.action ?? '');
+    if (action === 'refresh_profile') {
+      const results = await refreshAccountProfiles(session.org.id, accountIds);
+      const ok = results.filter((r) => r.ok && r.names).length;
+      const empty = results.filter((r) => r.ok && !r.names).length;
+      const failed = results.filter((r) => !r.ok);
+      const parts = [`${ok} name${ok === 1 ? '' : 's'} fetched from the provider`];
+      if (empty) parts.push(`${empty} with no name on file (set them on the account page)`);
+      if (failed.length) parts.push(`${failed.length} failed: ${failed[0]?.error ?? ''}`);
+      return reply.redirect(back(failed.length === results.length ? 'error' : 'notice', parts.join(' · ') + '.'));
+    }
     try {
       const settings = action === 'settings' ? (patchFromBulkForm(body) as Record<string, unknown>) : undefined;
       if (action === 'settings' && (!settings || Object.keys(settings).length === 0)) {

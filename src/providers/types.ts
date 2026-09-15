@@ -50,6 +50,12 @@ export const PROVIDER_FOLDERS: CanonicalFolder[] = ['INBOX', 'Spam', 'Sent'];
 // Both providers speak raw RFC822 MIME on the send path; reads are normalized
 // into the shapes above. All methods take an accountId and resolve tokens via
 // the shared token store.
+export interface ProviderProfile {
+  displayName: string | null;
+  firstName: string | null;
+  lastName: string | null;
+}
+
 export interface Provider {
   /** Largest raw MIME message the provider's send path accepts, in bytes. */
   readonly maxRawSize: number;
@@ -65,6 +71,9 @@ export interface Provider {
   pollChanges(accountId: string, cursor: string): Promise<PollResult>;
   /** Whether the granted OAuth scopes permit upstream writes (move/flags). */
   supportsWrite(grantedScopes: string): boolean;
+  /** The mailbox owner's name as the provider has it (send-as name on Gmail,
+   *  the directory entry on Microsoft). Fields are null when unknown. */
+  fetchProfile(accountId: string): Promise<ProviderProfile>;
   /** Newest message ids in a canonical folder (up to limit). */
   listMessageIds(accountId: string, folder: CanonicalFolder, limit: number): Promise<string[]>;
   /**

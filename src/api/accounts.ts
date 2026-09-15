@@ -13,9 +13,17 @@ import {
 import { config } from '../config.js';
 import { loadAccount, orgOf, requireScope } from './plugin.js';
 import { parseTags, setAccountTags, MAX_TAG_LENGTH, MAX_TAGS_PER_ACCOUNT } from '../accounts/tags.js';
+import { namesFor, setAccountNames, refreshAccountProfiles } from '../accounts/profile.js';
+
+const idList = (v: string | undefined) => (v ? v.split(',').map((s) => s.trim()).filter(Boolean) : undefined);
 
 const accountTagsSchema = z
-  .object({ tags: z.array(z.string().max(MAX_TAG_LENGTH)).max(MAX_TAGS_PER_ACCOUNT).optional() })
+  .object({
+    tags: z.array(z.string().max(MAX_TAG_LENGTH)).max(MAX_TAGS_PER_ACCOUNT).optional(),
+    firstName: z.string().max(60).nullable().optional(),
+    lastName: z.string().max(60).nullable().optional(),
+    displayName: z.string().max(120).nullable().optional(),
+  })
   .strict();
 
 export function publicAccount(a: typeof schema.accounts.$inferSelect) {
@@ -27,6 +35,10 @@ export function publicAccount(a: typeof schema.accounts.$inferSelect) {
     status: a.status,
     lastError: a.lastError,
     tags: parseTags(a.tagsJson),
+    firstName: namesFor(a).firstName || null,
+    lastName: namesFor(a).lastName || null,
+    /** Whether the names are stored (provider or hand-set) or guessed from the address. */
+    namesSource: namesFor(a).source,
     createdAt: a.createdAt,
   };
 }
@@ -55,13 +67,16 @@ export function registerAccountRoutes(app: FastifyInstance) {
     if (!account) return reply.code(404).send({ error: 'Unknown account' });
     const input = accountTagsSchema.parse(req.body ?? {});
     if (input.tags) setAccountTags(account.id, input.tags);
+    if (input.firstName !== undefined || input.lastName !== undefined || input.displayName !== undefined) {
+      setAccountNames(account.id, { firstName: input.firstName, lastName: input.lastName, displayName: input.displayName });
+    }
     const fresh = db.select().from(schema.accounts).where(eq(schema.accounts.id, account.id)).get();
     return publicAccount(fresh ?? account);
   });
 
   // CSV with per-account SMTP settings for this proxy (auto-creates missing
   // credentials) — directly importable into sending tools.
-  app.get<{ Querystring: { format?: string } }>('/accounts/export.csv', async (req, reply) => {
+  app.get<{ Querystring: { format?: string; tag?: string; accountIds?: string } }>('/accounts/export.csv', async (req, reply) => {
     if (!requireScope(req, reply, 'export')) return;
     const format = req.query.format ?? 'generic';
     return reply
@@ -70,7 +85,14 @@ export function registerAccountRoutes(app: FastifyInstance) {
         'Content-Disposition',
         `attachment; filename="outreachemailmcp-${format}-accounts.csv"`,
       )
-      .send(buildAccountsCsv(orgOf(req), format));
+      .send(buildAccountsCsv(orgOf(req), format, { tag: req.query.tag, accountIds: idList(req.query.accountIds) }));
+  });
+
+  // Pull the owner's name from the provider for some or all mailboxes.
+  app.post<{ Body: { accountIds?: string[] } }>('/accounts/refresh-profile', async (req, reply) => {
+    if (!requireScope(req, reply, 'accounts')) return;
+    const ids = Array.isArray(req.body?.accountIds) ? req.body.accountIds.map(String) : undefined;
+    return { results: await refreshAccountProfiles(orgOf(req), ids) };
   });
 
   // Mint a signed OAuth connect link that works without an admin session —

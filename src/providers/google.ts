@@ -126,12 +126,29 @@ async function modifyLabels(
   });
 }
 
+function splitName(name: string | null): { firstName: string | null; lastName: string | null } {
+  if (!name) return { firstName: null, lastName: null };
+  const parts = name.split(/\s+/).filter(Boolean);
+  return { firstName: parts[0] ?? null, lastName: parts.length > 1 ? parts.slice(1).join(' ') : null };
+}
+
 export const googleProvider: Provider = {
   // Gmail API media upload accepts up to 25 MB
   maxRawSize: 25 * 1024 * 1024,
 
   supportsWrite(grantedScopes) {
     return grantedScopes.includes('gmail.modify');
+  },
+
+  async fetchProfile(accountId) {
+    // The send-as name is what recipients see and what the admin set; the
+    // OpenID name would need the profile scope, which the connect flow does
+    // not ask for.
+    const res = await gmailFetch(accountId, `${API}/settings/sendAs`);
+    const body = (await res.json()) as { sendAs?: { sendAsEmail?: string; displayName?: string; isPrimary?: boolean }[] };
+    const primary = (body.sendAs ?? []).find((s) => s.isPrimary) ?? body.sendAs?.[0];
+    const displayName = primary?.displayName?.trim() || null;
+    return { displayName, ...splitName(displayName) };
   },
 
   async listMessageIds(accountId, folder, limit) {

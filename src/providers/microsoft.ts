@@ -148,6 +148,20 @@ export const microsoftProvider: Provider = {
     return grantedScopes.includes('Mail.ReadWrite');
   },
 
+  async fetchProfile(accountId) {
+    const res = await graphFetch(accountId, `${GRAPH}/me?$select=displayName,givenName,surname`);
+    const body = (await res.json()) as { displayName?: string; givenName?: string; surname?: string };
+    const displayName = body.displayName?.trim() || null;
+    let firstName = body.givenName?.trim() || null;
+    let lastName = body.surname?.trim() || null;
+    if (!firstName && displayName) {
+      const parts = displayName.split(/\s+/);
+      firstName = parts[0] ?? null;
+      lastName = lastName ?? (parts.length > 1 ? parts.slice(1).join(' ') : null);
+    }
+    return { displayName, firstName, lastName };
+  },
+
   async listMessageIds(accountId, folder, limit) {
     const params = new URLSearchParams({
       $top: String(limit),

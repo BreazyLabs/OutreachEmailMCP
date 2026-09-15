@@ -76,3 +76,33 @@ describe('api key scopes', () => {
     expect(hasScope(undefined, 'read')).toBe(false);
   });
 });
+
+describe('export names and selection', () => {
+  it('uses stored names, then the display name, then a guess from the address', async () => {
+    const { db, schema } = await import('../db/index.js');
+    const { namesFor } = await import('../accounts/profile.js');
+    const now = Date.now();
+    db.insert(schema.accounts)
+      .values({ id: 'csv-guess', orgId, provider: 'google', email: 'steven.kasper@scale8.test', displayName: null, status: 'active', createdAt: now, updatedAt: now })
+      .run();
+    db.insert(schema.accounts)
+      .values({ id: 'csv-stored', orgId, provider: 'microsoft', email: 'x@corp.test', displayName: 'X Corp', firstName: 'Xavier', lastName: 'Corp', status: 'active', createdAt: now, updatedAt: now })
+      .run();
+    const guess = namesFor(db.select().from(schema.accounts).where((await import('drizzle-orm')).eq(schema.accounts.id, 'csv-guess')).get()!);
+    expect(guess).toMatchObject({ firstName: 'Steven', lastName: 'Kasper', source: 'derived' });
+    const stored = namesFor(db.select().from(schema.accounts).where((await import('drizzle-orm')).eq(schema.accounts.id, 'csv-stored')).get()!);
+    expect(stored).toMatchObject({ firstName: 'Xavier', lastName: 'Corp', displayName: 'X Corp', source: 'account' });
+  });
+
+  it('exports only the selected mailboxes, or only one tag', async () => {
+    const { buildAccountsCsv } = await import('../export/accounts-csv.js');
+    const { setAccountTags } = await import('../accounts/tags.js');
+    setAccountTags('csv-stored', ['batch-1']);
+    const emails = (csv: string) => csv.trim().split('\r\n').slice(1).map((l) => l.split(',')[0]);
+    expect(emails(buildAccountsCsv(orgId, 'instantly', { accountIds: ['csv-guess', 'nope'] }))).toEqual(['steven.kasper@scale8.test']);
+    expect(emails(buildAccountsCsv(orgId, 'instantly', { tag: 'BATCH-1' }))).toEqual(['x@corp.test']);
+    expect(emails(buildAccountsCsv(orgId, 'instantly')).length).toBe(3);
+    const row = buildAccountsCsv(orgId, 'instantly', { accountIds: ['csv-guess'] }).trim().split('\r\n')[1]!.split(',');
+    expect(row.slice(0, 3)).toEqual(['steven.kasper@scale8.test', 'Steven', 'Kasper']);
+  });
+});

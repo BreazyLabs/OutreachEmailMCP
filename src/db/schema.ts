@@ -66,6 +66,9 @@ export const accounts = sqliteTable(
     provider: text('provider', { enum: ['google', 'microsoft'] }).notNull(),
     email: text('email').notNull(),
     displayName: text('display_name'),
+    /** The person's name as the provider has it (or as set here), used by sequencer exports. */
+    firstName: text('first_name'),
+    lastName: text('last_name'),
     status: text('status', { enum: ['active', 'auth_error', 'disabled'] })
       .notNull()
       .default('active'),

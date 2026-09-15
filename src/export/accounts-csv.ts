@@ -3,6 +3,15 @@ import { db, schema } from '../db/index.js';
 import { decryptSecret } from '../crypto/secrets.js';
 import { createSmtpCredential, smtpAdvertisedHost } from '../smtp/credentials.js';
 import { config } from '../config.js';
+import { namesFor } from '../accounts/profile.js';
+import { parseTags } from '../accounts/tags.js';
+
+export interface ExportFilter {
+  /** Only these mailboxes (ids); everything in the workspace when absent. */
+  accountIds?: string[];
+  /** Only mailboxes carrying this tag (case-insensitive). */
+  tag?: string;
+}
 
 export interface AccountExportRow {
   email: string;
@@ -26,7 +35,7 @@ function csvField(value: string | number | null): string {
 // One row per non-disabled account with ready-to-use proxy credentials.
 // Accounts without an active SMTP credential get one auto-generated, so every
 // export is complete and directly importable.
-export function collectExportRows(orgId: string): AccountExportRow[] {
+export function collectExportRows(orgId: string, filter: ExportFilter = {}): AccountExportRow[] {
   const host = smtpAdvertisedHost();
   const rows: AccountExportRow[] = [];
   const accounts = db
@@ -35,8 +44,12 @@ export function collectExportRows(orgId: string): AccountExportRow[] {
     .where(eq(schema.accounts.orgId, orgId))
     .orderBy(desc(schema.accounts.createdAt))
     .all();
+  const wanted = filter.accountIds ? new Set(filter.accountIds) : null;
+  const tag = filter.tag?.trim().toLowerCase();
   for (const account of accounts) {
     if (account.status === 'disabled') continue;
+    if (wanted && !wanted.has(account.id)) continue;
+    if (tag && !parseTags(account.tagsJson).some((t) => t.toLowerCase() === tag)) continue;
     const credential = db
       .select()
       .from(schema.smtpCredentials)
@@ -47,13 +60,12 @@ export function collectExportRows(orgId: string): AccountExportRow[] {
     const { username, password } = credential
       ? { username: credential.username, password: decryptSecret(credential.passwordEnc) }
       : createSmtpCredential(account);
-    const displayName = account.displayName ?? '';
-    const [firstName, ...rest] = displayName.split(' ');
+    const names = namesFor(account);
     rows.push({
       email: account.email,
-      displayName,
-      firstName: firstName ?? '',
-      lastName: rest.join(' '),
+      displayName: names.displayName,
+      firstName: names.firstName,
+      lastName: names.lastName,
       provider: account.provider,
       status: account.status,
       host,
@@ -166,9 +178,9 @@ export const SEQUENCER_LABELS: Record<string, string> = {
   woodpecker: 'Woodpecker',
 };
 
-export function buildAccountsCsv(orgId: string, format = 'generic'): string {
+export function buildAccountsCsv(orgId: string, format = 'generic', filter: ExportFilter = {}): string {
   const columns = SEQUENCER_COLUMNS[format] ?? SEQUENCER_COLUMNS.generic!;
-  const rows = collectExportRows(orgId);
+  const rows = collectExportRows(orgId, filter);
   const lines = [columns.map(([label]) => csvField(label)).join(',')];
   for (const row of rows) {
     lines.push(columns.map(([, render]) => csvField(render(row))).join(','));

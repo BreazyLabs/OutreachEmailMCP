@@ -56,7 +56,7 @@ describe('warmup settings', () => {
 
 describe('warmup health and prefilled forms', () => {
   const base = {
-    accountId: 'a', email: 'a@x.test', provider: 'google', accountStatus: 'active', tags: [] as string[], enabled: true,
+    accountId: 'a', email: 'a@x.test', provider: 'google', accountStatus: 'active', tags: [] as string[], names: { firstName: 'A', lastName: 'B', source: 'account' as const }, enabled: true,
     state: 'steady' as const, rampDay: 9, startedAt: Date.now() - 10 * 86_400_000, todayTarget: 20, todaySent: 12,
     todayReceived: 10, receiveLimit: 45, dailyLimit: 30,
     placement7d: { inbox: 90, spam: 0, category: 0, missing: 0, bounced: 0, pending: 3, total: 93 },
