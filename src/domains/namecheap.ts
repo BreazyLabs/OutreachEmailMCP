@@ -191,6 +191,13 @@ export class NamecheapClient {
     };
   }
 
+  /** Account funds. API purchases are paid from this balance only; Namecheap never charges a card through the API. */
+  async balances(): Promise<{ available: number; total: number; currency: string }> {
+    const r = await this.call('namecheap.users.getBalances', {});
+    const b = asArray(r.UserGetBalancesResult as Record<string, string> | Record<string, string>[])[0] ?? {};
+    return { available: Number(b.AvailableBalance ?? 0), total: Number(b.AccountBalance ?? 0), currency: String(b.Currency ?? 'USD') };
+  }
+
   /** The account's address book; the default entry is the registrant Namecheap itself would use. */
   async addresses(): Promise<{ id: string; name: string; isDefault: boolean }[]> {
     const r = await this.call('namecheap.users.address.getList', {});

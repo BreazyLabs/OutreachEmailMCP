@@ -289,3 +289,30 @@ describe('Namecheap registration without WhoisGuard', () => {
     await expect(failing.register('y.nl')).rejects.toThrow(/Insufficient funds/);
   });
 });
+
+describe('Namecheap balance guard', () => {
+  it('reads the balance and refuses a batch the balance cannot cover before buying anything', async () => {
+    const service = await import('../domains/service.js');
+    const { NamecheapClient } = await import('../domains/namecheap.js');
+    const { createOrgWithOwner } = await import('../tenancy/orgs.js');
+    const { setIntegration } = await import('../domains/integrations.js');
+    const orgId = createOrgWithOwner({ orgName: 'Funds Co', email: 'owner@funds.test', password: 'pw-pw-pw-pw-1' }).orgId;
+    setIntegration(orgId, 'premiuminboxes', { apiToken: 't', workspaceId: null, hosting: { platform: 'Namecheap' }, defaults: { emailProvider: 'Google', inboxesPerDomain: 1, prefixVariants: ['first'], insured: false } });
+    const cfg = { apiUser: 'u', apiKey: 'k', username: 'u', clientIp: '1.2.3.4', contact: { firstName: 'D', lastName: 'T', address1: 'S 1', city: 'A', stateProvince: 'NH', postalCode: '1', country: 'NL', phone: '+31.612345678', email: 'd@x.test' } };
+    let creates = 0;
+    service.clients.namecheap = () => new NamecheapClient(cfg, fakeFetch((url) => {
+      const cmd = new URL(url).searchParams.get('Command');
+      if (cmd === 'namecheap.users.getBalances') return { body: xml('<UserGetBalancesResult Currency="USD" AvailableBalance="10.00" AccountBalance="10.00" EarnedAmount="0" WithdrawableAmount="0" FundsRequiredForAutoRenew="0" />') };
+      if (cmd === 'namecheap.users.getPricing') return { body: xml('<UserGetPricingResult><ProductType Name="domains"><ProductCategory Name="register"><Product Name="nl"><Price Duration="1" DurationType="YEAR" Price="7.48" YourPrice="7.48" Currency="USD" /></Product></ProductCategory></ProductType></UserGetPricingResult>') };
+      if (cmd === 'namecheap.domains.create') { creates++; return { body: xml('<DomainCreateResult Domain="a.nl" Registered="true" ChargedAmount="7.48" DomainID="1" OrderID="2" TransactionID="3" WhoisguardEnable="false" />') }; }
+      return { body: xml('', 'ERROR') };
+    }));
+    expect(await service.clients.namecheap(orgId).balances()).toEqual({ available: 10, total: 10, currency: 'USD' });
+    const est = await service.estimateBatch(orgId, ['a.nl', 'b.nl'], 1);
+    expect(est.balance).toEqual({ available: 10, currency: 'USD' });
+    const r = await service.runBatch(orgId, { domains: ['a.nl', 'b.nl'], emailProvider: 'google', inboxesPerDomain: 1, prefixVariants: ['first'], personas: [{ domain: 'a.nl', firstName: 'A', lastName: 'B' }] });
+    expect(r.bought).toEqual([]);
+    expect(r.orderError).toMatch(/balance is 10.00 USD, the 2 registrations need 14.96/);
+    expect(creates).toBe(0);
+  });
+});

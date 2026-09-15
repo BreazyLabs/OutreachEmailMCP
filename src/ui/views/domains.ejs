@@ -245,6 +245,7 @@
         <tbody id="cost-body"><tr><td class="muted" colspan="4">Tick domains above to see the breakdown.</td></tr></tbody>
         <tfoot id="cost-foot"></tfoot>
       </table>
+      <% if (balance) { %><div class="note <%= balance.available > 0 ? 'info' : 'bad' %>" id="balance-note" data-available="<%= balance.available %>" style="margin-top:0.6rem">Namecheap balance: <b><%= balance.available.toFixed(2) %> <%= balance.currency %></b>. Namecheap bills API registrations from this balance only, never from a card; <a href="https://www.namecheap.com/support/knowledgebase/article.aspx/9739/2200/how-to-add-funds-to-your-namecheap-account/" target="_blank" rel="noopener">add funds</a> before a batch that needs more. <span id="balance-verdict"></span></div><% } %>
       <p class="mini" style="margin:0.4rem 0 0">Domain prices are Namecheap's first-year price per ending (<%= candidates && candidates.length ? 'as checked above' : 'shown after a check' %>). Mailboxes are <%= (pricePerInboxCents / 100).toFixed(2) %> each per 4 weeks, the rate on your current subscriptions; Premium Inboxes bills them, not this platform.</p>
     </div>
     <footer>
@@ -425,6 +426,8 @@
     body.innerHTML = rows;
     foot.innerHTML = '<tr><td colspan="3">Now, at Namecheap</td><td class="num">' + domainsTotal.toFixed(2) + ' ' + CURRENCY + '</td></tr><tr><td colspan="3">Every 4 weeks, at Premium Inboxes</td><td class="num">' + inboxTotal.toFixed(2) + ' USD</td></tr>';
     document.getElementById('batch-summary').textContent = on.length + ' domain' + (on.length === 1 ? '' : 's') + ' · ' + inboxes + ' mailbox' + (inboxes === 1 ? '' : 'es');
+    const bn = document.getElementById('balance-note');
+    if (bn) { const avail = Number(bn.dataset.available); const v = document.getElementById('balance-verdict'); v.textContent = domainsTotal > avail ? 'This batch needs ' + (domainsTotal - avail).toFixed(2) + ' more than the balance.' : domainsTotal ? 'Enough for this batch.' : ''; bn.classList.toggle('bad', domainsTotal > avail); bn.classList.toggle('info', domainsTotal <= avail); }
     const btn = document.getElementById('batch-submit');
     btn.textContent = (on.length - owned ? 'Buy ' + (on.length - owned) + ' domain' + (on.length - owned === 1 ? '' : 's') + ' & order ' : 'Order ') + inboxes + ' mailbox' + (inboxes === 1 ? '' : 'es');
   }

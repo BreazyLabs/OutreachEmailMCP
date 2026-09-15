@@ -290,6 +290,8 @@ export interface BatchEstimate {
   inboxes: number;
   pricePerInboxCents: number;
   inboxTotalCents: number;
+  /** Namecheap account funds, when the registrar was asked. */
+  balance: { available: number; currency: string } | null;
 }
 
 /** Prices for a batch: per-TLD registration for the domains still to buy, the learned inbox price for all mailboxes. */
@@ -297,9 +299,12 @@ export async function estimateBatch(orgId: string, domainList: string[], inboxes
   const owned = new Set(listDomains(orgId).map((d) => d.domain));
   const toBuy = domainList.filter((d) => !owned.has(d));
   let prices = new Map<string, TldPrice>();
+  let balance: BatchEstimate['balance'] = null;
   if (toBuy.length) {
     const nc = clients.namecheap(orgId);
-    prices = new Map((await nc.pricing([...new Set(toBuy.map((d) => splitDomain(d).tld))])).map((p) => [p.tld, p]));
+    const [priceList, funds] = await Promise.all([nc.pricing([...new Set(toBuy.map((d) => splitDomain(d).tld))]), nc.balances().catch(() => null)]);
+    prices = new Map(priceList.map((p) => [p.tld, p]));
+    balance = funds ? { available: funds.available, currency: funds.currency } : null;
   }
   const pi = getIntegration(orgId, 'premiuminboxes');
   const pricePerInboxCents = pi?.pricePerInboxCents ?? 350;
@@ -315,6 +320,7 @@ export async function estimateBatch(orgId: string, domainList: string[], inboxes
     inboxes,
     pricePerInboxCents,
     inboxTotalCents: inboxes * pricePerInboxCents,
+    balance,
   };
 }
 
@@ -328,6 +334,18 @@ export interface BatchResult {
 export async function runBatch(orgId: string, input: OrderInput): Promise<BatchResult> {
   const owned = new Set(listDomains(orgId).map((d) => d.domain));
   const toBuy = input.domains.filter((d) => !owned.has(d));
+  // Namecheap bills API purchases from the prepaid balance only: check it
+  // first so a short balance fails the batch cleanly instead of halfway.
+  if (toBuy.length) {
+    const est = await estimateBatch(orgId, input.domains, input.inboxesPerDomain);
+    if (est.balance && est.balance.available < est.domainTotal) {
+      return {
+        bought: [],
+        order: null,
+        orderError: `Namecheap balance is ${est.balance.available.toFixed(2)} ${est.balance.currency}, the ${toBuy.length} registration${toBuy.length === 1 ? '' : 's'} need ${est.domainTotal.toFixed(2)}. Namecheap only bills API purchases from the account balance, never a card: add funds in Namecheap under Profile → Billing, then try again.`,
+      };
+    }
+  }
   const bought = toBuy.length ? await buyDomains(orgId, toBuy, input.tags ?? []) : [];
   const failed = new Set(bought.filter((r) => !r.ok).map((r) => r.domain));
   const orderDomains = input.domains.filter((d) => !failed.has(d));

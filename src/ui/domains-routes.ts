@@ -69,6 +69,7 @@ function pageLocals(req: FastifyRequest, session: SessionContext, extra: Record<
     showAll: (req.query as { all?: string }).all === '1',
     candidates: null as Candidate[] | null,
     wizardError: null as string | null,
+    balance: null as { available: number; currency: string } | null,
     wizard: wizardInput(req.body as Body | undefined, pi),
     suggestedPassword: generateMailboxPassword(),
     ...extra,
@@ -109,7 +110,8 @@ async function wizardAgain(req: FastifyRequest, reply: import('fastify').Fastify
       candidates = null;
     }
   }
-  return reply.view('domains.ejs', pageLocals(req, session, { panel: 'batch', wizardError: error, candidates }));
+  const balance = getIntegration(session.org.id, 'namecheap') ? await clients.namecheap(session.org.id).balances().catch(() => null) : null;
+  return reply.view('domains.ejs', pageLocals(req, session, { panel: 'batch', wizardError: error, candidates, balance }));
 }
 
 export function registerDomainsUiRoutes(app: FastifyInstance): void {
@@ -129,7 +131,8 @@ export function registerDomainsUiRoutes(app: FastifyInstance): void {
     try {
       const candidates = custom.length ? await checkDomains(session.org.id, custom) : await findDomains(session.org.id, brand, tlds);
       if (candidates.length === 0) return wizardAgain(req, reply, session, 'Type a brand word or paste a list of domains to check.');
-      return reply.view('domains.ejs', pageLocals(req, session, { candidates, panel: 'batch' }));
+      const balance = await clients.namecheap(session.org.id).balances().catch(() => null);
+      return reply.view('domains.ejs', pageLocals(req, session, { candidates, panel: 'batch', balance }));
     } catch (err) {
       return wizardAgain(req, reply, session, `Namecheap: ${String(err).slice(0, 300)}`);
     }
