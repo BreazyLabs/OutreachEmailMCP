@@ -264,6 +264,12 @@
           <button type="submit" name="action" value="refresh_profile" class="secondary">Fetch names from the provider</button>
           <span class="muted">Reads the send-as name from Gmail or the directory entry from Microsoft 365 and stores it. Instantly requires both a first and a last name.</span>
         </div>
+        <div class="row" style="margin-top:0.5rem">
+          <input name="names_first" placeholder="First name" style="width:150px" autocomplete="off">
+          <input name="names_last" placeholder="Last name" style="width:150px" autocomplete="off">
+          <button type="submit" name="action" value="names" class="secondary">Set on all selected</button>
+          <span class="muted">One person across several domains: search their address, select all shown, set the name once. A blank field is left as it is.</span>
+        </div>
       </section>
       <section id="panel-settings" hidden>
         <h3>Settings for the selected mailboxes</h3>

@@ -106,3 +106,34 @@ describe('export names and selection', () => {
     expect(row.slice(0, 3)).toEqual(['steven.kasper@scale8.test', 'Steven', 'Kasper']);
   });
 });
+
+describe('names borrowed from siblings and set in bulk', () => {
+  it('completes steven@ with the last name of steven.kasper@ on the same domain', async () => {
+    const { db, schema } = await import('../db/index.js');
+    const { eq } = await import('drizzle-orm');
+    const { namesFor } = await import('../accounts/profile.js');
+    const now = Date.now();
+    db.insert(schema.accounts)
+      .values({ id: 'csv-sib', orgId, provider: 'google', email: 'steven@scale8.test', displayName: null, status: 'active', createdAt: now, updatedAt: now })
+      .run();
+    db.insert(schema.accounts)
+      .values({ id: 'csv-initial', orgId, provider: 'google', email: 'thom.v@slim.test', displayName: null, status: 'active', createdAt: now, updatedAt: now })
+      .run();
+    const sib = namesFor(db.select().from(schema.accounts).where(eq(schema.accounts.id, 'csv-sib')).get()!);
+    expect(sib).toMatchObject({ firstName: 'Steven', lastName: 'Kasper', source: 'derived' });
+    const initial = namesFor(db.select().from(schema.accounts).where(eq(schema.accounts.id, 'csv-initial')).get()!);
+    expect(initial).toMatchObject({ firstName: 'Thom', lastName: '' });
+  });
+
+  it('sets a name on a selection through the bulk endpoint', async () => {
+    const { runBulk } = await import('../warmup/api.js');
+    const { namesFor, accountsMissingNames } = await import('../accounts/profile.js');
+    const { db, schema } = await import('../db/index.js');
+    const { eq } = await import('drizzle-orm');
+    expect(accountsMissingNames(orgId).map((a) => a.email)).toContain('thom.v@slim.test');
+    runBulk(orgId, { accountIds: ['csv-initial'], action: 'names', names: { lastName: 'Vermeer' } });
+    const n = namesFor(db.select().from(schema.accounts).where(eq(schema.accounts.id, 'csv-initial')).get()!);
+    expect(n).toMatchObject({ firstName: 'Thom', lastName: 'Vermeer', source: 'account' });
+    expect(accountsMissingNames(orgId).map((a) => a.email)).not.toContain('thom.v@slim.test');
+  });
+});

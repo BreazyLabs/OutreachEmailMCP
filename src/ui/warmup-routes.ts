@@ -180,15 +180,20 @@ export function registerWarmupUiRoutes(app: FastifyInstance): void {
       if (tags && tags.add.length + tags.remove.length === 0) {
         return reply.redirect(back('error', 'Type a tag to add, or tick one to remove.'));
       }
+      const names = action === 'names' ? { firstName: String(body.names_first ?? ''), lastName: String(body.names_last ?? '') } : undefined;
+      if (names && !names.firstName.trim() && !names.lastName.trim()) {
+        return reply.redirect(back('error', 'Type a first or last name to set.'));
+      }
       const { results } = runBulk(session.org.id, {
         accountIds,
-        action: action === 'settings' ? undefined : (action as 'enable' | 'disable' | 'pause' | 'resume' | 'clear_overrides' | 'tags'),
+        action: action === 'settings' ? undefined : (action as 'enable' | 'disable' | 'pause' | 'resume' | 'clear_overrides' | 'tags' | 'names'),
         settings,
         tags,
+        names,
       });
       const failed = results.filter((r) => !r.ok);
       const verb =
-        action === 'enable' ? 'enabled' : action === 'disable' ? 'disabled' : action === 'pause' ? 'paused' : action === 'resume' ? 'resumed' : action === 'tags' ? 'retagged' : 'updated';
+        action === 'enable' ? 'enabled' : action === 'disable' ? 'disabled' : action === 'pause' ? 'paused' : action === 'resume' ? 'resumed' : action === 'tags' ? 'retagged' : action === 'names' ? 'renamed' : 'updated';
       const notice = failed.length
         ? `${results.length - failed.length} ${verb}, ${failed.length} failed: ${failed[0]?.error ?? ''}`
         : `${results.length} mailbox${results.length === 1 ? '' : 'es'} ${verb}.${action === 'enable' ? ' Today is planned within a minute.' : ''}`;

@@ -26,6 +26,7 @@ import { healthOf, orgHealth } from './health.js';
 import { connectedDomains, domainHealthFor, issuesOf, dnsVerdict, refreshDomainHealth } from './dns-health.js';
 import { logActivity } from '../observability/activity.js';
 import { editAccountTags } from '../accounts/tags.js';
+import { setNamesOnAccounts } from '../accounts/profile.js';
 
 const personaSchema = z
   .object({
@@ -59,10 +60,15 @@ const orgPatchSchema = z
 const bulkSchema = z
   .object({
     accountIds: z.array(z.string()).min(1).max(500),
-    action: z.enum(['enable', 'disable', 'pause', 'resume', 'settings', 'clear_overrides', 'tags']).optional(),
+    action: z.enum(['enable', 'disable', 'pause', 'resume', 'settings', 'clear_overrides', 'tags', 'names']).optional(),
     settings: z.record(z.unknown()).optional(),
     tags: z
       .object({ add: z.array(z.string()).max(50).optional(), remove: z.array(z.string()).max(50).optional() })
+      .strict()
+      .optional(),
+    /** Set the same first/last name on every listed mailbox (blank = leave as is). */
+    names: z
+      .object({ firstName: z.string().max(60).optional(), lastName: z.string().max(60).optional() })
       .strict()
       .optional(),
   })
@@ -153,6 +159,16 @@ export function runBulk(
     for (const id of ids) {
       clearAccountOverrides(id);
       results.push({ accountId: id, ok: true });
+    }
+  } else if (input.action === 'names' || input.names) {
+    const names = {
+      firstName: input.names?.firstName?.trim() ? input.names.firstName.trim() : undefined,
+      lastName: input.names?.lastName?.trim() ? input.names.lastName.trim() : undefined,
+    };
+    if (names.firstName || names.lastName) {
+      setNamesOnAccounts(ids, names);
+      for (const id of ids) results.push({ accountId: id, ok: true });
+      logActivity({ category: 'warmup', action: 'bulk-names', status: 'ok', orgId, detail: `${ids.length} mailbox(es): ${[names.firstName, names.lastName].filter(Boolean).join(' ')}` });
     }
   } else if (input.action === 'tags' || input.tags) {
     const change = input.tags ?? {};
