@@ -110,9 +110,10 @@ describe('Premium Inboxes client and order flow', () => {
     expect(body.emailProvider).toBe('Google');
     expect(body.domains).toBe('getbreazy.nl\ntrybreazy.nl');
     expect(body.numberOfInboxes).toBe(4);
+    expect(body.prefixVariants).toEqual(['dennis', 'dennis.jansen']);
     expect(body.manualPersonas).toEqual([
-      { firstName: 'Dennis', lastName: 'Jansen', domains: ['getbreazy.nl'], prefixVariants: ['first', 'first.last'] },
-      { firstName: 'Dennis', lastName: 'Jansen', domains: ['trybreazy.nl'], prefixVariants: ['first', 'first.last'] },
+      { firstName: 'Dennis', lastName: 'Jansen', domains: ['getbreazy.nl'], prefixVariants: ['dennis', 'dennis.jansen'] },
+      { firstName: 'Dennis', lastName: 'Jansen', domains: ['trybreazy.nl'], prefixVariants: ['dennis', 'dennis.jansen'] },
     ]);
     expect(body.additionalInfo).toMatch(/do NOT connect these mailboxes to a sequencer/);
     expect(body.additionalInfo).toContain('http://localhost:3000/');
@@ -204,5 +205,66 @@ describe('Namecheap address book', () => {
       return { body: xml('', 'ERROR') };
     }));
     expect(await client.defaultContact()).toEqual({ firstName: 'Daniel', lastName: 'T', organization: 'Breazy', address1: 'Straat 1', city: 'Amsterdam', stateProvince: 'NH', postalCode: '1000AA', country: 'NL', phone: '+31.612345678', email: 'd@x.test' });
+  });
+});
+
+describe('address patterns and one-click batches', () => {
+  it('renders patterns into the literal local parts the provisioner expects', async () => {
+    const { localParts, renderPattern } = await import('../domains/patterns.js');
+    expect(localParts(['first', 'first.last', 'f.last', 'first.l', 'flast', 'firstlast', 'last'], 'Dave', 'Spies')).toEqual(['dave', 'dave.spies', 'd.spies', 'dave.s', 'dspies', 'davespies', 'spies']);
+    expect(localParts(['first', 'first.last'], 'Dennis', '')).toEqual(['dennis']);
+    expect(renderPattern('first.last', 'José', 'van Empelen')).toBe('jose.vanempelen');
+    expect(localParts(['custom.part'], 'A', 'B')).toEqual(['custompart']);
+  });
+
+  it('buys the new domains, skips the owned ones, and orders on everything that succeeded', async () => {
+    const service = await import('../domains/service.js');
+    const { NamecheapClient } = await import('../domains/namecheap.js');
+    const { PremiumInboxesClient } = await import('../domains/premiuminboxes.js');
+    const { db, schema } = await import('../db/index.js');
+    const { eq, and } = await import('drizzle-orm');
+    const { createOrgWithOwner } = await import('../tenancy/orgs.js');
+    const { setIntegration, getIntegration } = await import('../domains/integrations.js');
+    const orgId = createOrgWithOwner({ orgName: 'Batch Co', email: 'owner@batch.test', password: 'pw-pw-pw-pw-1' }).orgId;
+    setIntegration(orgId, 'premiuminboxes', { apiToken: 't', workspaceId: null, hosting: { platform: 'Namecheap' }, defaults: { emailProvider: 'Google', inboxesPerDomain: 2, prefixVariants: ['first'], insured: false } });
+    const ncCfg = { apiUser: 'u', apiKey: 'k', username: 'u', clientIp: '1.2.3.4', contact: { firstName: 'D', lastName: 'T', address1: 'S 1', city: 'A', stateProvince: 'NH', postalCode: '1', country: 'NL', phone: '+31.612345678', email: 'd@x.test' } };
+    let purchaseBody: Record<string, unknown> | null = null;
+    service.clients.namecheap = () => new NamecheapClient(ncCfg, fakeFetch((url) => {
+      const u = new URL(url);
+      const cmd = u.searchParams.get('Command');
+      if (cmd === 'namecheap.users.getPricing') return { body: xml('<UserGetPricingResult><ProductType Name="domains"><ProductCategory Name="register"><Product Name="nl"><Price Duration="1" DurationType="YEAR" Price="7.48" YourPrice="7.48" Currency="USD" /></Product></ProductCategory></ProductType></UserGetPricingResult>') };
+      if (cmd === 'namecheap.domains.create') {
+        const d = u.searchParams.get('DomainName')!;
+        if (d === 'bad.nl') return { body: xml('', 'ERROR') };
+        return { body: xml(`<DomainCreateResult Domain="${d}" Registered="true" ChargedAmount="7.48" DomainID="1" OrderID="2" TransactionID="3" WhoisguardEnable="true" />`) };
+      }
+      return { body: xml('', 'ERROR') };
+    }));
+    service.clients.premiuminboxes = () => new PremiumInboxesClient('t', fakeFetch((url, init) => {
+      if (url.endsWith('/client/purchase')) { purchaseBody = JSON.parse(String(init?.body)); return { body: '"ord_b"' }; }
+      if (url.endsWith('/client/subscription')) return { body: JSON.stringify({ data: [{ _id: 's', status: 'Active', price: 700, discount: 0, items: [{ id: 'plan', type: 'plan', quantity: 2, unitPrice: 350, price: 700 }] }] }) };
+      return { body: JSON.stringify({ data: [] }) };
+    }));
+    const now = Date.now();
+    db.insert(schema.domains).values({ id: 'owned1', orgId, domain: 'owned.nl', registrar: 'namecheap', status: 'purchased', createdAt: now, updatedAt: now }).run();
+
+    expect(await service.learnInboxPrice(orgId)).toBe(350);
+    expect(getIntegration(orgId, 'premiuminboxes')?.pricePerInboxCents).toBe(350);
+    const est = await service.estimateBatch(orgId, ['owned.nl', 'new.nl', 'bad.nl'], 2);
+    expect(est.domains.map((d) => [d.domain, d.owned, d.price])).toEqual([['owned.nl', true, null], ['new.nl', false, 7.48], ['bad.nl', false, 7.48]]);
+    expect(est).toMatchObject({ domainTotal: 14.96, inboxes: 6, pricePerInboxCents: 350, inboxTotalCents: 2100 });
+
+    const r = await service.runBatch(orgId, {
+      domains: ['owned.nl', 'new.nl', 'bad.nl'], emailProvider: 'google', inboxesPerDomain: 2, prefixVariants: ['first', 'first.last'],
+      personas: ['owned.nl', 'new.nl', 'bad.nl'].map((domain) => ({ domain, firstName: 'Dave', lastName: 'Spies' })), tags: ['b1'], profilePictureLink: 'https://x.test/p.png',
+    });
+    expect(r.bought.map((b) => [b.domain, b.ok])).toEqual([['new.nl', true], ['bad.nl', false]]);
+    expect(r.order?.externalId).toBe('ord_b');
+    expect(r.orderError).toBeNull();
+    expect(purchaseBody).toMatchObject({ domains: 'owned.nl\nnew.nl', numberOfInboxes: 4, prefixVariants: ['dave', 'dave.spies'], profilePictureLink: 'https://x.test/p.png' });
+    expect(String((purchaseBody as unknown as Record<string, unknown>).additionalInfo)).toMatch(/access you already have on file/);
+    const status = (d: string) => db.select().from(schema.domains).where(and(eq(schema.domains.orgId, orgId), eq(schema.domains.domain, d))).get()?.status;
+    expect([status('owned.nl'), status('new.nl'), status('bad.nl')]).toEqual(['ordered', 'ordered', undefined]);
+    expect(service.domainsOverview(orgId).domains.every((d) => d.platform)).toBe(true);
   });
 });

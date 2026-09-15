@@ -3,13 +3,16 @@
   const fmtDate = (t) => t ? new Date(t).toLocaleDateString() : '—';
   const fmtWhen = (t) => t ? new Date(t).toLocaleString() : '—';
   const nc = integrations.namecheap; const pi = integrations.premiuminboxes;
+  const shown = showAll ? domains : domains.filter((d) => d.platform);
+  const hidden = domains.length - shown.length;
   const counts = { purchased: 0, ordered: 0, provisioned: 0, connected: 0 };
-  for (const d of domains) counts[d.status] = (counts[d.status] || 0) + 1;
+  for (const d of shown) counts[d.status] = (counts[d.status] || 0) + 1;
   const deliveredTotal = orders.reduce((n, o) => n + o.delivered, 0);
   const connectedTotal = orders.reduce((n, o) => n + o.connected, 0);
-  const orderable = domains.filter((d) => d.status === 'purchased');
-  const key = (d) => d.replace(/[^a-z0-9]/g, '_');
+  const idle = domains.filter((d) => d.status === 'purchased');
   const stepClass = (s) => ({ purchased: 'paused', ordered: 'ramping', provisioned: 'queued', connected: 'active' })[s] || '';
+  const w = wizard;
+  const picked = new Set(w.picked);
 %>
 <style>
   .pagehead { display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap; margin-bottom:0.2rem; }
@@ -72,19 +75,30 @@
   .reveal { filter: blur(4px); transition: filter 0.15s; } .reveal:hover { filter:none; }
   h3.sect { font-size:0.9rem; margin:1.1rem 0 0.4rem; text-transform:uppercase; letter-spacing:0.04em; color:var(--muted); }
   .empty { color:var(--muted); font-size:0.88rem; padding:0.6rem 0; }
+  .wiz h3 { font-size:0.8rem; text-transform:uppercase; letter-spacing:0.05em; color:var(--muted); margin:1.2rem 0 0.5rem; display:flex; align-items:center; gap:0.5rem; }
+  .wiz h3 .n { display:inline-flex; width:20px; height:20px; border-radius:50%; background:var(--accent); color:#fff; font-size:0.72rem; align-items:center; justify-content:center; }
+  .patterns { display:flex; gap:0.4rem; flex-wrap:wrap; }
+  .patterns label { border:1px solid var(--line); border-radius:8px; padding:0.3rem 0.6rem; font-size:0.82rem; cursor:pointer; display:grid; }
+  .patterns label small { color:var(--muted); font-family: ui-monospace, monospace; font-size:0.72rem; }
+  .patterns label:has(input:checked) { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 12%, transparent); }
+  .patterns input { display:none; }
+  .pic { display:flex; gap:0.8rem; align-items:center; }
+  .pic img { width:56px; height:56px; border-radius:50%; object-fit:cover; border:1px solid var(--line); background:var(--bg); }
+  .cost td, .cost th { padding:0.35rem 0.5rem; }
+  .cost tfoot td { font-weight:700; border-top:2px solid var(--line); }
+  .picklist { display:grid; grid-template-columns:repeat(auto-fill, minmax(230px, 1fr)); gap:0.15rem 1rem; font-size:0.85rem; }
+  .bigbtn { padding:0.7rem 1.2rem; font-size:0.95rem; }
 </style>
 
 <div class="pagehead">
   <h1>Domains</h1>
   <div class="row">
-    <button type="button" data-open="dlg-find" <%= nc.configured ? '' : 'disabled title="Connect Namecheap first"' %>>Find &amp; buy domains</button>
-    <button type="button" class="ghost" data-open="dlg-order" <%= pi.configured ? '' : 'disabled title="Connect Premium Inboxes first"' %>>Order mailboxes</button>
-    <form method="post" action="/ui/domains/import" style="display:inline"><input type="hidden" name="_csrf" value="<%= csrf %>"><button type="submit" class="ghost" title="Adopt the domains of connected mailboxes and import the Namecheap account's domains">Import domains</button></form>
+    <button type="button" data-open="dlg-batch" <%= nc.configured || pi.configured ? '' : 'disabled title="Connect Namecheap and Premium Inboxes first"' %>>+ New batch</button>
     <% if (pi.configured) { %><form method="post" action="/ui/domains/orders/sync" style="display:inline"><input type="hidden" name="_csrf" value="<%= csrf %>"><button type="submit" class="ghost">Check orders now</button></form><% } %>
     <button type="button" class="ghost" data-open="dlg-integrations">Integrations</button>
   </div>
 </div>
-<p class="muted" style="max-width:80ch; margin:0.2rem 0 0.4rem">From a brand word to warmed mailboxes: buy domains at Namecheap, order the mailboxes at Premium Inboxes, and follow each domain until every mailbox is connected here. Orders are checked every 10 minutes.</p>
+<p class="muted" style="max-width:80ch; margin:0.2rem 0 0.4rem">A batch goes from brand word to warmed mailboxes in one click: pick or paste domains, set up the person and the addresses, see what it costs, and the proxy buys the domains at Namecheap and orders the mailboxes at Premium Inboxes. Orders are checked every 10 minutes.</p>
 <div class="steps">
   <span class="status <%= nc.configured ? (nc.lastError ? 'bad' : 'ok') : '' %>"><span class="dot"></span>Namecheap <%= nc.configured ? (nc.lastError ? 'error' : 'connected') : 'not connected' %></span>
   <span class="arrow">·</span>
@@ -93,28 +107,26 @@
 </div>
 
 <div class="kpis">
-  <div class="kpi"><div class="n"><%= domains.length %></div><div class="l">domains</div><div class="muted" style="font-size:0.75rem"><%= counts.purchased %> purchased · <%= counts.ordered %> ordered · <%= counts.provisioned %> provisioned · <%= counts.connected %> connected</div></div>
+  <div class="kpi"><div class="n"><%= shown.length %></div><div class="l">domains<%= showAll ? '' : ' bought here' %></div><div class="muted" style="font-size:0.75rem"><%= counts.purchased %> idle · <%= counts.ordered %> ordered · <%= counts.provisioned %> provisioned · <%= counts.connected %> connected</div></div>
   <div class="kpi"><div class="n"><%= orders.length %></div><div class="l">orders</div><div class="muted" style="font-size:0.75rem"><%= orders.filter((o) => o.delivered === 0).length %> in progress</div></div>
   <div class="kpi <%= deliveredTotal && connectedTotal < deliveredTotal ? 'warn' : deliveredTotal ? 'good' : '' %>"><div class="n"><%= connectedTotal %><small>/<%= deliveredTotal %></small></div><div class="l">mailboxes connected</div><div class="muted" style="font-size:0.75rem">of those delivered by orders</div></div>
+  <div class="kpi"><div class="n"><%= (pricePerInboxCents / 100).toFixed(2) %><small> / inbox</small></div><div class="l">per 4 weeks</div><div class="muted" style="font-size:0.75rem">learned from your subscriptions</div></div>
 </div>
 
-<h2>Domains</h2>
-<form method="post" action="/ui/domains/orders" id="domain-form">
-<input type="hidden" name="_csrf" value="<%= csrf %>">
+<h2 style="display:flex; justify-content:space-between; align-items:baseline">Domains <span class="muted" style="font-weight:400; font-size:0.82rem"><% if (showAll) { %><a href="/ui/domains">Show only domains bought here</a><% } else if (hidden) { %><a href="/ui/domains?all=1">Show all <%= domains.length %>, including <%= hidden %> imported</a><% } %></span></h2>
 <div class="card">
-  <% if (domains.length === 0) { %>
-    <p class="empty">No domains yet. Use <b>Find &amp; buy domains</b>, or <b>Import domains</b> to adopt the domains of the mailboxes already connected.</p>
+  <% if (shown.length === 0) { %>
+    <p class="empty">Nothing bought through the platform yet. Start a <b>New batch</b><%= hidden ? `, or <a href="/ui/domains?all=1">show the ${hidden} imported domains</a>` : '' %>.</p>
   <% } else { %>
   <div style="overflow-x:auto">
   <table>
-    <thead><tr><th></th><th>Domain</th><th>Step</th><th>Registrar</th><th>Expires</th><th title="SPF, DKIM, DMARC of the domain — capital = present">DNS</th><th class="num">Mailboxes</th><th>Order</th></tr></thead>
+    <thead><tr><th>Domain</th><th>Step</th><th>Bought</th><th>Expires</th><th title="SPF, DKIM, DMARC of the domain">DNS</th><th class="num">Mailboxes</th><th>Order</th></tr></thead>
     <tbody>
-    <% for (const d of domains) { %>
+    <% for (const d of shown) { %>
     <tr class="<%= d.status === 'connected' ? 'dim' : '' %>">
-      <td><input type="checkbox" name="domains" value="<%= d.domain %>" class="dcheck" <%= d.status === 'purchased' ? '' : '' %>></td>
-      <td><b><%= d.domain %></b><% for (const tg of d.tags) { %><span class="tag"><%= tg %></span><% } %></td>
-      <td><span class="badge <%= stepClass(d.status) %>"><%= d.status %></span></td>
-      <td class="muted"><%= d.registrar %></td>
+      <td><b><%= d.domain %></b><% for (const tg of d.tags) { %><span class="tag"><%= tg %></span><% } %><% if (!d.platform) { %><span class="muted" style="font-size:0.75rem"> · imported</span><% } %></td>
+      <td><span class="badge <%= stepClass(d.status) %>"><%= d.status === 'purchased' ? 'idle' : d.status %></span></td>
+      <td class="muted"><%= d.purchasedAt ? fmtDate(d.purchasedAt) : (d.registrar === 'namecheap' ? 'Namecheap' : '—') %></td>
       <td class="muted"><%= fmtDate(d.expiresAt) %></td>
       <td><% const dv = d.dns.verdict; %><span class="health <%= dv === 'ok' ? 'healthy' : dv === 'warn' ? 'watch' : dv === 'bad' ? 'at_risk' : 'no_data' %>" title="<%= d.dns.issues.length ? d.dns.issues.join(' · ') : dv === 'unchecked' ? 'Checked once a mailbox on it is connected' : 'SPF, DKIM, DMARC present' %>"><span class="dot"></span><%= dv === 'unchecked' ? '…' : dv %></span></td>
       <td class="num"><%= d.mailboxes.connected %><span class="muted">/<%= Math.max(d.mailboxes.delivered, d.mailboxes.connected) %></span></td>
@@ -124,7 +136,6 @@
     </tbody>
   </table>
   </div>
-  <p class="muted" style="margin:0.5rem 0 0">Tick domains, then <b>Order mailboxes</b> to order for exactly those.</p>
   <% } %>
 </div>
 
@@ -154,104 +165,88 @@
   <% } %>
 </div>
 
-<%# ---- order slide-over (inside the domain form so the ticked domains travel with it) ---- %>
-<dialog class="slide" id="dlg-order">
-  <div class="dlg">
-    <header><div><h2>Order mailboxes at Premium Inboxes</h2><div class="who" id="order-who">Tick domains in the table first, or pick them here.</div></div><button type="button" class="x" data-close aria-label="Close">×</button></header>
+<%# ---- the batch wizard: one form, three steps, one click at the end ---- %>
+<dialog class="slide" id="dlg-batch" style="width:min(900px, 100vw)">
+  <form method="post" action="/ui/domains/batch" class="dlg wiz" id="batch">
+    <input type="hidden" name="_csrf" value="<%= csrf %>">
+    <input type="hidden" name="pictureData" id="pictureData">
+    <header><div><h2>New batch</h2><div class="who">Domains are registered at Namecheap for one year with WhoisGuard; mailboxes are ordered at Premium Inboxes and billed by them per 4 weeks.</div></div><button type="button" class="x" data-close aria-label="Close">×</button></header>
     <div class="body">
-      <% if (!pi.configured) { %><div class="note bad">Premium Inboxes is not connected. Open Integrations first.</div><% } %>
-      <div class="note info">Premium Inboxes sets up the domains' DNS with the registrar login saved under Integrations, creates the mailboxes, and hands back addresses and passwords. The order asks them to connect each mailbox to this gateway through the onboarding link rather than to a sequencer; you can also do that yourself from the order's mailbox list.</div>
-      <h3 class="sect">Domains</h3>
-      <% if (orderable.length === 0 && domains.length === 0) { %><p class="empty">No purchased domains yet.</p><% } %>
-      <div id="order-domains" class="grid2" style="gap:0.2rem 1rem">
-        <% for (const d of domains) { %>
-        <label style="font-size:0.85rem; <%= d.status === 'purchased' ? '' : 'opacity:0.6' %>"><input type="checkbox" class="odom" data-domain="<%= d.domain %>" data-key="<%= key(d.domain) %>"> <%= d.domain %> <span class="muted">(<%= d.status %>)</span></label>
-        <% } %>
-      </div>
-      <h3 class="sect">Mailboxes</h3>
-      <div class="grid3">
-        <div class="field"><label>Provider</label><select name="emailProvider"><option value="google" <%= pi.defaults.emailProvider === 'Google' ? 'selected' : '' %>>Google Workspace</option><option value="microsoft" <%= pi.defaults.emailProvider === 'Microsoft' ? 'selected' : '' %>>Microsoft 365</option></select></div>
-        <div class="field"><label>Inboxes per domain</label><input type="number" name="inboxesPerDomain" min="1" max="10" value="<%= pi.defaults.inboxesPerDomain %>"></div>
-        <div class="field"><label>Address patterns</label><input name="prefixVariants" value="<%= (pi.defaults.prefixVariants || []).join(', ') %>" placeholder="first, first.last, f.last"></div>
-      </div>
-      <div class="grid3">
-        <div class="field"><label>Default first name</label><input name="defaultFirst" placeholder="Dennis"></div>
-        <div class="field"><label>Default last name</label><input name="defaultLast" placeholder="Jansen"></div>
-        <div class="field"><label>Mailbox password</label><input name="password" value="<%= suggestedPassword %>"></div>
-      </div>
-      <details style="margin:0.2rem 0 0.8rem"><summary class="muted" style="cursor:pointer">Different person per domain</summary>
-        <table style="margin-top:0.4rem" id="persona-table">
-          <thead><tr><th>Domain</th><th>First name</th><th>Last name</th></tr></thead>
-          <tbody>
-          <% for (const d of domains) { %>
-          <tr data-key="<%= key(d.domain) %>" hidden><td><%= d.domain %></td><td><input name="first_<%= key(d.domain) %>" placeholder="default"></td><td><input name="last_<%= key(d.domain) %>" placeholder="default"></td></tr>
-          <% } %>
-          </tbody>
-        </table>
-      </details>
+      <% if (!nc.configured) { %><div class="note bad">Namecheap is not connected: you can only order on domains already bought. Open Integrations to connect it.</div><% } %>
+      <% if (!pi.configured) { %><div class="note bad">Premium Inboxes is not connected: domains can be bought but no mailboxes ordered. Open Integrations to connect it.</div><% } %>
+
+      <h3><span class="n">1</span> Domains</h3>
       <div class="grid2">
-        <div class="field"><label>Tag the domains</label><input name="tags" placeholder="batch-3, client-x"></div>
-        <div class="field"><label style="margin-top:1.2rem"><input type="checkbox" name="insured" value="1" <%= pi.defaults.insured ? 'checked' : '' %>> Insured order</label></div>
+        <div class="field"><label>Brand word, suggestions are built around it</label><input name="brand" value="<%= w.brand %>" placeholder="breazy" autocomplete="off"></div>
+        <div class="field"><label>Or paste domains to check, comma separated</label><input name="custom" value="<%= w.custom.replace(/\n/g, ', ') %>" placeholder="getbreazy.nl, trybreazy.com, breazygrowth.nl"></div>
       </div>
-      <div class="field"><label>Extra instructions for Premium Inboxes</label><textarea name="additionalInfo" rows="2" placeholder="Anything they should know"></textarea></div>
+      <div class="row" style="justify-content:space-between; align-items:flex-end">
+        <div class="field" style="margin:0"><label>Endings for suggestions</label>
+          <div class="tldpick"><% for (const t of ['com', 'nl', 'co', 'io', 'net', 'org', 'eu', 'de', 'be', 'agency']) { %><label><input type="checkbox" name="tlds" value="<%= t %>" <%= w.tlds.includes(t) ? 'checked' : '' %>>.<%= t %></label><% } %></div>
+        </div>
+        <button type="submit" formaction="/ui/domains/find" formnovalidate class="secondary" <%= nc.configured ? '' : 'disabled' %>>Check availability</button>
+      </div>
+      <% if (candidates) { %>
+      <% const avail = candidates.filter((c) => c.available && !c.owned); %>
+      <div class="row" style="justify-content:space-between; margin-top:0.6rem">
+        <b><%= avail.length %> of <%= candidates.length %> available</b>
+        <button type="button" class="secondary" style="padding:0.25rem 0.6rem; font-size:0.78rem" id="tick-all">Tick all available</button>
+      </div>
+      <table style="margin-top:0.3rem">
+        <thead><tr><th></th><th>Domain</th><th>Status</th><th class="num">Price / year</th></tr></thead>
+        <tbody>
+        <% for (const c of candidates) { %>
+        <tr class="<%= c.available && !c.owned ? '' : 'dim' %>">
+          <td><% if (c.available && !c.owned) { %><input type="checkbox" name="domains" value="<%= c.domain %>" class="pick" data-price="<%= c.price || 0 %>" data-tld="<%= c.tld %>" <%= picked.has(c.domain) ? 'checked' : '' %>><% } %></td>
+          <td><%= c.domain %></td>
+          <td class="muted"><%= c.owned ? 'yours' : c.available === null ? 'unknown' : c.available ? (c.premium ? 'available · premium' : 'available') : 'taken' %></td>
+          <td class="num"><%= c.price !== null ? c.price.toFixed(2) + ' ' + (c.currency || '') : '—' %></td>
+        </tr>
+        <% } %>
+        </tbody>
+      </table>
+      <% } %>
+      <% if (idle.length) { %>
+      <p class="muted" style="margin:0.8rem 0 0.3rem">Domains you already own with no mailboxes yet, free to add to this batch:</p>
+      <div class="picklist"><% for (const d of idle) { %><label><input type="checkbox" name="domains" value="<%= d.domain %>" class="pick" data-price="0" data-owned="1" <%= picked.has(d.domain) ? 'checked' : '' %>> <%= d.domain %></label><% } %></div>
+      <% } %>
+
+      <h3><span class="n">2</span> Mailboxes</h3>
+      <div class="grid3">
+        <div class="field"><label>Provider</label><select name="emailProvider"><option value="google" <%= w.emailProvider === 'google' ? 'selected' : '' %>>Google Workspace</option><option value="microsoft" <%= w.emailProvider === 'microsoft' ? 'selected' : '' %>>Microsoft 365</option></select></div>
+        <div class="field"><label>Inboxes per domain</label><input type="number" name="inboxesPerDomain" id="perDomain" min="1" max="10" value="<%= w.inboxesPerDomain %>"></div>
+        <div class="field"><label>Mailbox password</label><input name="password" value="<%= w.password || suggestedPassword %>"></div>
+        <div class="field"><label>First name</label><input name="firstName" id="firstName" value="<%= w.firstName %>" placeholder="Dave" autocomplete="off"></div>
+        <div class="field"><label>Last name</label><input name="lastName" id="lastName" value="<%= w.lastName %>" placeholder="Spies" autocomplete="off"></div>
+        <div class="field"><label>Tag the batch</label><input name="tags" value="<%= w.tags %>" placeholder="batch-4, client-x"></div>
+      </div>
+      <div class="field"><label>Addresses, tick as many patterns as inboxes per domain</label>
+        <div class="patterns" id="patterns">
+          <% for (const p of patterns) { %><label><input type="checkbox" name="patterns" value="<%= p.key %>" <%= w.patterns.includes(p.key) ? 'checked' : '' %>><span><%= p.label %></span><small data-pattern="<%= p.key %>"><%= p.example %></small></label><% } %>
+        </div>
+      </div>
+      <div class="grid2">
+        <div class="field"><label>Profile picture</label>
+          <div class="pic"><img id="picPreview" src="<%= w.pictureUrl %>" alt="" <%= w.pictureUrl ? '' : 'hidden' %>><div style="flex:1"><input type="file" id="picFile" accept="image/png,image/jpeg,image/webp"><input name="pictureUrl" id="pictureUrl" value="<%= w.pictureUrl %>" placeholder="or a public image URL" style="margin-top:0.3rem"></div></div>
+        </div>
+        <div class="field"><label>Extra instructions for Premium Inboxes</label><textarea name="additionalInfo" rows="3" placeholder="Anything they should know"><%= w.additionalInfo %></textarea>
+          <label style="font-size:0.85rem"><input type="checkbox" name="insured" value="1" <%= w.insured ? 'checked' : '' %>> Insured order</label></div>
+      </div>
+
+      <h3><span class="n">3</span> Cost</h3>
+      <table class="cost" id="cost">
+        <thead><tr><th>Item</th><th class="num">Qty</th><th class="num">Unit</th><th class="num">Amount</th></tr></thead>
+        <tbody id="cost-body"><tr><td class="muted" colspan="4">Tick domains above to see the breakdown.</td></tr></tbody>
+        <tfoot id="cost-foot"></tfoot>
+      </table>
+      <p class="mini" style="margin:0.4rem 0 0">Domain prices are Namecheap's first-year price per ending (<%= candidates && candidates.length ? 'as checked above' : 'shown after a check' %>). Mailboxes are <%= (pricePerInboxCents / 100).toFixed(2) %> each per 4 weeks, the rate on your current subscriptions; Premium Inboxes bills them, not this platform.</p>
     </div>
     <footer>
-      <span class="left" id="order-summary"></span>
+      <span class="left" id="batch-summary"></span>
       <button type="button" class="secondary" data-close>Cancel</button>
-      <button type="submit" id="order-submit" <%= pi.configured ? '' : 'disabled' %>>Place order</button>
+      <button type="submit" class="bigbtn" id="batch-submit" <%= pi.configured ? '' : 'disabled title="Connect Premium Inboxes first"' %>>Buy &amp; order</button>
     </footer>
-  </div>
-</dialog>
-</form>
-
-<%# ---- find & buy slide-over ---- %>
-<dialog class="slide" id="dlg-find">
-  <div class="dlg">
-    <header><div><h2>Find &amp; buy domains</h2><div class="who">Suggestions are the brand word with the usual company prefixes and suffixes; availability and first-year prices come from Namecheap.</div></div><button type="button" class="x" data-close aria-label="Close">×</button></header>
-    <div class="body">
-      <% if (!nc.configured) { %><div class="note bad">Namecheap is not connected. Open Integrations first.</div><% } %>
-      <form method="post" action="/ui/domains/find" id="find-form">
-        <input type="hidden" name="_csrf" value="<%= csrf %>">
-        <div class="grid2">
-          <div class="field"><label>Brand word</label><input name="brand" value="<%= findInput.brand %>" placeholder="breazy" autocomplete="off"></div>
-          <div class="field"><label>Or check specific domains</label><input name="custom" value="<%= findInput.custom.replace(/\n/g, ', ') %>" placeholder="getbreazy.nl, trybreazy.com"></div>
-        </div>
-        <div class="field"><label>Endings</label>
-          <div class="tldpick"><% for (const t of ['com', 'nl', 'co', 'io', 'net', 'org', 'eu', 'de', 'be', 'agency']) { %><label><input type="checkbox" name="tlds" value="<%= t %>" <%= findInput.tlds.includes(t) ? 'checked' : '' %>>.<%= t %></label><% } %></div>
-        </div>
-        <button type="submit" class="secondary" <%= nc.configured ? '' : 'disabled' %>>Check availability</button>
-      </form>
-      <% if (candidates) { %>
-      <form method="post" action="/ui/domains/buy" id="buy-form" style="margin-top:1rem">
-        <input type="hidden" name="_csrf" value="<%= csrf %>">
-        <% const avail = candidates.filter((c) => c.available && !c.owned); %>
-        <div class="row" style="justify-content:space-between">
-          <b><%= avail.length %> of <%= candidates.length %> available</b>
-          <span><button type="button" class="secondary" style="padding:0.25rem 0.6rem; font-size:0.78rem" id="buy-all">Tick all available</button></span>
-        </div>
-        <table style="margin-top:0.4rem">
-          <thead><tr><th></th><th>Domain</th><th>Status</th><th class="num">Price / year</th></tr></thead>
-          <tbody>
-          <% for (const c of candidates) { %>
-          <tr class="<%= c.available && !c.owned ? '' : 'dim' %>">
-            <td><% if (c.available && !c.owned) { %><input type="checkbox" name="domains" value="<%= c.domain %>" class="bcheck" data-price="<%= c.price || 0 %>"><% } %></td>
-            <td><%= c.domain %></td>
-            <td class="muted"><%= c.owned ? 'yours' : c.available === null ? 'unknown' : c.available ? (c.premium ? 'available · premium' : 'available') : 'taken' %></td>
-            <td class="num"><%= c.price !== null ? c.price.toFixed(2) + ' ' + (c.currency || '') : '—' %></td>
-          </tr>
-          <% } %>
-          </tbody>
-        </table>
-        <div class="row" style="margin-top:0.7rem">
-          <input name="tags" placeholder="Tag the purchase, e.g. batch-3" style="min-width:220px">
-          <button type="submit" id="buy-submit">Buy selected</button>
-          <span class="muted" id="buy-summary">Nothing ticked.</span>
-        </div>
-      </form>
-      <% } %>
-    </div>
-    <footer><span class="left">Registered with WhoisGuard on, one year, using the contact under Integrations.</span><button type="button" class="secondary" data-close>Close</button></footer>
-  </div>
+  </form>
 </dialog>
 
 <%# ---- order detail modals ---- %>
@@ -331,7 +326,7 @@
       <% if (pi.lastError) { %><div class="note bad"><%= pi.lastError %></div><% } %>
       <form method="post" action="/ui/integrations/premiuminboxes">
         <input type="hidden" name="_csrf" value="<%= csrf %>">
-        <p class="muted" style="margin:0 0 0.6rem">Generate the token in the Premium Inboxes portal under Settings → API Token. The hosting login is what their team uses to set the domains' DNS; use a registrar account that holds only cold-email domains.</p>
+        <p class="muted" style="margin:0 0 0.6rem">Generate the token in the Premium Inboxes portal under Settings → API Token. The hosting login is what their team uses to set the domains' DNS. Leave it blank when they already have your access on file; the order then says so.</p>
         <div class="grid2">
           <div class="field"><label>API token <%= pi.configured ? '(leave blank to keep ' + pi.tokenMasked + ')' : '' %></label><input name="apiToken" placeholder="<%= pi.configured ? pi.tokenMasked : '' %>" autocomplete="off"></div>
           <div class="field"><label>Workspace for orders</label>
@@ -367,65 +362,89 @@
 
 <script>
 (function () {
-  document.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => { const d = document.getElementById(b.dataset.open); if (d) { if (b.dataset.open === 'dlg-order') syncOrderPanel(true); d.showModal(); } }));
+  document.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => { const d = document.getElementById(b.dataset.open); if (d) d.showModal(); }));
   document.querySelectorAll('dialog').forEach((d) => {
     d.querySelectorAll('[data-close]').forEach((c) => c.addEventListener('click', () => d.close()));
     d.addEventListener('click', (e) => { if (e.target === d) d.close(); });
   });
   document.querySelectorAll('[data-confirm]').forEach((el) => el.addEventListener('click', (e) => { if (!confirm(el.dataset.confirm)) { e.preventDefault(); e.stopImmediatePropagation(); } }));
   const panel = <%- JSON.stringify(panel || '') %>;
-  if (panel) { const d = document.getElementById('dlg-' + panel); if (d) { if (panel === 'order') syncOrderPanel(true); d.showModal(); } }
+  if (panel) { const d = document.getElementById('dlg-' + panel); if (d) d.showModal(); }
 
-  // Order panel: mirror the table's ticks into the panel's checkboxes and back.
-  const tableChecks = Array.from(document.querySelectorAll('.dcheck'));
-  const panelChecks = Array.from(document.querySelectorAll('.odom'));
-  function syncOrderPanel(fromTable) {
-    if (fromTable) for (const p of panelChecks) { const t = tableChecks.find((c) => c.value === p.dataset.domain); if (t) p.checked = t.checked; }
-    else for (const p of panelChecks) { const t = tableChecks.find((c) => c.value === p.dataset.domain); if (t) t.checked = p.checked; }
-    const chosen = panelChecks.filter((p) => p.checked);
-    document.querySelectorAll('#persona-table tr[data-key]').forEach((tr) => { tr.hidden = !chosen.some((p) => p.dataset.key === tr.dataset.key); });
-    const per = Number(document.querySelector('[name=inboxesPerDomain]')?.value || 1);
-    const who = document.getElementById('order-who');
-    const sum = document.getElementById('order-summary');
-    if (who) who.textContent = chosen.length ? chosen.length + ' domain' + (chosen.length === 1 ? '' : 's') + ': ' + chosen.slice(0, 4).map((p) => p.dataset.domain).join(', ') + (chosen.length > 4 ? ' and ' + (chosen.length - 4) + ' more' : '') : 'Tick domains in the table first, or pick them here.';
-    if (sum) sum.textContent = chosen.length ? chosen.length * per + ' mailboxes across ' + chosen.length + ' domain' + (chosen.length === 1 ? '' : 's') : '';
-    const submit = document.getElementById('order-submit');
-    if (submit && !submit.hasAttribute('data-locked')) submit.disabled = chosen.length === 0;
+  const form = document.getElementById('batch');
+  if (!form) return;
+  const PRICE_PER_INBOX = <%= pricePerInboxCents %> / 100;
+  const CURRENCY = <%- JSON.stringify((candidates && candidates.find((c) => c.currency) || {}).currency || 'USD') %>;
+  const picks = () => Array.from(form.querySelectorAll('.pick'));
+  const first = document.getElementById('firstName'), last = document.getElementById('lastName');
+  const clean = (s) => (s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '');
+  function render(key, f, l) {
+    switch (key) {
+      case 'first': return f;
+      case 'first.last': return f && l ? f + '.' + l : '';
+      case 'first.l': return f && l ? f + '.' + l[0] : '';
+      case 'f.last': return f && l ? f[0] + '.' + l : '';
+      case 'firstlast': return f && l ? f + l : '';
+      case 'flast': return f && l ? f[0] + l : '';
+      case 'last': return l;
+      default: return '';
+    }
   }
-  if (document.getElementById('order-submit') && document.getElementById('order-submit').disabled) document.getElementById('order-submit').setAttribute('data-locked', '1');
-  panelChecks.forEach((p) => p.addEventListener('change', () => syncOrderPanel(false)));
-  tableChecks.forEach((t) => t.addEventListener('change', () => syncOrderPanel(true)));
-  const perInput = document.querySelector('[name=inboxesPerDomain]');
-  if (perInput) perInput.addEventListener('input', () => syncOrderPanel(true));
-  const domainForm = document.getElementById('domain-form');
-  if (domainForm) domainForm.addEventListener('submit', (e) => {
-    const n = tableChecks.filter((c) => c.checked).length;
-    const per = Number(document.querySelector('[name=inboxesPerDomain]')?.value || 1);
-    if (n === 0) { e.preventDefault(); alert('Tick at least one domain.'); return; }
-    if (!confirm('Place an order at Premium Inboxes for ' + n * per + ' mailboxes on ' + n + ' domain(s)? This is billed by them.')) e.preventDefault();
+  function previews() {
+    const f = clean(first.value) || 'dave', l = clean(last.value) || 'spies';
+    document.querySelectorAll('[data-pattern]').forEach((el) => { el.textContent = (render(el.dataset.pattern, f, l) || '—') + '@'; });
+  }
+  function cost() {
+    const on = picks().filter((c) => c.checked);
+    const per = Math.max(1, Number(document.getElementById('perDomain').value || 1));
+    const body = document.getElementById('cost-body'), foot = document.getElementById('cost-foot');
+    if (on.length === 0) { body.innerHTML = '<tr><td class="muted" colspan="4">Tick domains above to see the breakdown.</td></tr>'; foot.innerHTML = ''; document.getElementById('batch-summary').textContent = ''; return; }
+    const byTld = new Map();
+    let owned = 0;
+    for (const c of on) {
+      if (c.dataset.owned) { owned++; continue; }
+      const k = '.' + (c.dataset.tld || c.value.split('.').slice(1).join('.'));
+      const cur = byTld.get(k) || { n: 0, price: Number(c.dataset.price || 0) };
+      cur.n++; byTld.set(k, cur);
+    }
+    let rows = '', domainsTotal = 0;
+    for (const [tld, v] of byTld) { const amt = v.n * v.price; domainsTotal += amt; rows += '<tr><td>Domain registration ' + tld + ', 1 year</td><td class="num">' + v.n + '</td><td class="num">' + v.price.toFixed(2) + '</td><td class="num">' + amt.toFixed(2) + '</td></tr>'; }
+    if (owned) rows += '<tr><td>Domains already owned</td><td class="num">' + owned + '</td><td class="num">0.00</td><td class="num">0.00</td></tr>';
+    const inboxes = on.length * per, inboxTotal = inboxes * PRICE_PER_INBOX;
+    rows += '<tr><td>Mailboxes, per 4 weeks</td><td class="num">' + inboxes + '</td><td class="num">' + PRICE_PER_INBOX.toFixed(2) + '</td><td class="num">' + inboxTotal.toFixed(2) + '</td></tr>';
+    body.innerHTML = rows;
+    foot.innerHTML = '<tr><td colspan="3">Now, at Namecheap</td><td class="num">' + domainsTotal.toFixed(2) + ' ' + CURRENCY + '</td></tr><tr><td colspan="3">Every 4 weeks, at Premium Inboxes</td><td class="num">' + inboxTotal.toFixed(2) + ' USD</td></tr>';
+    document.getElementById('batch-summary').textContent = on.length + ' domain' + (on.length === 1 ? '' : 's') + ' · ' + inboxes + ' mailbox' + (inboxes === 1 ? '' : 'es');
+    const btn = document.getElementById('batch-submit');
+    btn.textContent = (on.length - owned ? 'Buy ' + (on.length - owned) + ' domain' + (on.length - owned === 1 ? '' : 's') + ' & order ' : 'Order ') + inboxes + ' mailbox' + (inboxes === 1 ? '' : 'es');
+  }
+  picks().forEach((c) => c.addEventListener('change', cost));
+  document.getElementById('perDomain').addEventListener('input', cost);
+  [first, last].forEach((el) => el.addEventListener('input', previews));
+  const tickAll = document.getElementById('tick-all');
+  if (tickAll) tickAll.addEventListener('click', () => { picks().forEach((c) => { if (!c.dataset.owned) c.checked = true; }); cost(); });
+  // Picture: a chosen file travels as a data URL; a URL is used as is.
+  const picFile = document.getElementById('picFile'), picUrl = document.getElementById('pictureUrl'), preview = document.getElementById('picPreview'), picData = document.getElementById('pictureData');
+  picFile.addEventListener('change', () => {
+    const f = picFile.files && picFile.files[0];
+    if (!f) return;
+    if (f.size > 4 * 1024 * 1024) { alert('Pick an image under 4 MB.'); picFile.value = ''; return; }
+    const r = new FileReader();
+    r.onload = () => { picData.value = String(r.result); preview.src = String(r.result); preview.hidden = false; picUrl.value = ''; };
+    r.readAsDataURL(f);
   });
-
-  // Buy form: running total and confirmation.
-  const buyForm = document.getElementById('buy-form');
-  if (buyForm) {
-    const checks = Array.from(buyForm.querySelectorAll('.bcheck'));
-    const summary = document.getElementById('buy-summary');
-    const update = () => {
-      const on = checks.filter((c) => c.checked);
-      const total = on.reduce((n, c) => n + Number(c.dataset.price || 0), 0);
-      summary.textContent = on.length ? on.length + ' domain' + (on.length === 1 ? '' : 's') + ', about ' + total.toFixed(2) + ' a year' : 'Nothing ticked.';
-    };
-    checks.forEach((c) => c.addEventListener('change', update));
-    document.getElementById('buy-all').addEventListener('click', () => { checks.forEach((c) => { c.checked = true; }); update(); });
-    buyForm.addEventListener('submit', (e) => {
-      const on = checks.filter((c) => c.checked);
-      if (on.length === 0) { e.preventDefault(); alert('Tick at least one available domain.'); return; }
-      const total = on.reduce((n, c) => n + Number(c.dataset.price || 0), 0);
-      if (!confirm('Register ' + on.length + ' domain(s) at Namecheap for about ' + total.toFixed(2) + '? This charges the Namecheap account.')) e.preventDefault();
-    });
-    update();
-  }
-  syncOrderPanel(true);
+  picUrl.addEventListener('input', () => { if (picUrl.value) { picData.value = ''; preview.src = picUrl.value; preview.hidden = false; } });
+  form.addEventListener('submit', (e) => {
+    if (e.submitter && e.submitter.getAttribute('formaction')) return; // a check, not the order
+    const on = picks().filter((c) => c.checked);
+    if (on.length === 0) { e.preventDefault(); alert('Tick at least one domain.'); return; }
+    if (!first.value.trim() || !last.value.trim()) { e.preventDefault(); alert('Fill in the first and last name for the mailboxes.'); return; }
+    if (!form.querySelector('[name=patterns]:checked')) { e.preventDefault(); alert('Tick at least one address pattern.'); return; }
+    const buy = on.filter((c) => !c.dataset.owned).length;
+    const per = Math.max(1, Number(document.getElementById('perDomain').value || 1));
+    if (!confirm((buy ? 'Register ' + buy + ' domain(s) at Namecheap now and ' : '') + 'order ' + on.length * per + ' mailbox(es) at Premium Inboxes? Both are billed to your accounts there.')) e.preventDefault();
+  });
+  previews(); cost();
 })();
 </script>
 <%- include('_footer') %>

@@ -15,8 +15,12 @@ import { domainHealthFor, dnsVerdict, issuesOf } from '../warmup/dns-health.js';
 import { parseTags } from '../accounts/tags.js';
 import { NamecheapClient, type Availability, type TldPrice } from './namecheap.js';
 import { PremiumInboxesClient, type PiOrder, type PiPurchase, type PiDeliveredEmail } from './premiuminboxes.js';
-import { getIntegration, markIntegration, orgsWithIntegration } from './integrations.js';
+import { getIntegration, setIntegration, markIntegration, orgsWithIntegration } from './integrations.js';
 import { suggestDomains, splitDomain, type Suggestion } from './names.js';
+import { localParts } from './patterns.js';
+import { config } from '../config.js';
+import fs from 'node:fs';
+import path from 'node:path';
 import type { Domain, ProviderOrder } from '../db/schema.js';
 
 // Test seams: the workers and routes go through these so a test can swap the
@@ -186,6 +190,7 @@ export interface OrderInput {
   insured?: boolean;
   additionalInfo?: string;
   tags?: string[];
+  profilePictureLink?: string;
 }
 
 export interface OrderResult {
@@ -204,26 +209,31 @@ export function buildPurchase(orgId: string, input: OrderInput, hosting: PiPurch
   const hubLink = createConnectHubLink(orgId);
   const note = [
     `Please do NOT connect these mailboxes to a sequencer. Connect each one to our mail gateway (OutreachEmailMCP) through this link instead, signed in as the mailbox: ${hubLink}`,
+    !hosting.username && !hosting.password ? `DNS: please use the ${hosting.platform} access you already have on file for this account.` : '',
     input.additionalInfo?.trim() ?? '',
   ]
     .filter(Boolean)
     .join('\n\n');
+  const partsFor = (p: { firstName: string; lastName: string }) => {
+    const parts = localParts(input.prefixVariants, p.firstName, p.lastName);
+    return parts.length ? parts : [p.firstName.toLowerCase()];
+  };
   return {
     emailProvider: input.emailProvider === 'google' ? 'Google' : 'Microsoft',
     hosting,
     domains: input.domains.join('\n'),
     numberOfInboxes: input.domains.length * input.inboxesPerDomain,
     inboxesPerDomain: input.inboxesPerDomain,
-    prefixVariants: input.prefixVariants,
+    prefixVariants: partsFor(first),
     emailFirstName: first.firstName,
     emailLastName: first.lastName,
     ...(input.password ? { password: input.password } : {}),
-    ...(defaults.profilePictureLink ? { profilePictureLink: defaults.profilePictureLink } : {}),
+    ...((input.profilePictureLink ?? defaults.profilePictureLink) ? { profilePictureLink: input.profilePictureLink ?? defaults.profilePictureLink } : {}),
     ...(defaults.masterInboxEmail ? { masterInboxEmail: defaults.masterInboxEmail } : {}),
     additionalInfo: note,
     manualPersonas: input.domains.map((domain) => {
       const p = input.personas.find((x) => x.domain === domain) ?? first;
-      return { firstName: p.firstName, lastName: p.lastName, domains: [domain], prefixVariants: input.prefixVariants };
+      return { firstName: p.firstName, lastName: p.lastName, domains: [domain], prefixVariants: partsFor(p) };
     }),
     insured: !!input.insured,
     flowStartedAt: Date.now(),
@@ -269,6 +279,94 @@ export async function placeOrder(orgId: string, input: OrderInput): Promise<Prov
   return db.select().from(schema.providerOrders).where(eq(schema.providerOrders.id, id)).get()!;
 }
 
+// ---------------------------------------------------------------------------
+// One click: buy the domains that are not ours yet, then order mailboxes on all of them
+// ---------------------------------------------------------------------------
+
+export interface BatchEstimate {
+  domains: { domain: string; owned: boolean; price: number | null; currency: string | null }[];
+  domainTotal: number;
+  currency: string;
+  inboxes: number;
+  pricePerInboxCents: number;
+  inboxTotalCents: number;
+}
+
+/** Prices for a batch: per-TLD registration for the domains still to buy, the learned inbox price for all mailboxes. */
+export async function estimateBatch(orgId: string, domainList: string[], inboxesPerDomain: number): Promise<BatchEstimate> {
+  const owned = new Set(listDomains(orgId).map((d) => d.domain));
+  const toBuy = domainList.filter((d) => !owned.has(d));
+  let prices = new Map<string, TldPrice>();
+  if (toBuy.length) {
+    const nc = clients.namecheap(orgId);
+    prices = new Map((await nc.pricing([...new Set(toBuy.map((d) => splitDomain(d).tld))])).map((p) => [p.tld, p]));
+  }
+  const pi = getIntegration(orgId, 'premiuminboxes');
+  const pricePerInboxCents = pi?.pricePerInboxCents ?? 350;
+  const domains = domainList.map((domain) => {
+    const p = owned.has(domain) ? null : prices.get(splitDomain(domain).tld) ?? null;
+    return { domain, owned: owned.has(domain), price: p?.price ?? null, currency: p?.currency ?? null };
+  });
+  const inboxes = domainList.length * inboxesPerDomain;
+  return {
+    domains,
+    domainTotal: domains.reduce((n, d) => n + (d.price ?? 0), 0),
+    currency: [...prices.values()][0]?.currency ?? 'USD',
+    inboxes,
+    pricePerInboxCents,
+    inboxTotalCents: inboxes * pricePerInboxCents,
+  };
+}
+
+export interface BatchResult {
+  bought: PurchaseResult[];
+  order: ProviderOrder | null;
+  orderError: string | null;
+}
+
+/** Buy what is new (skipping failures), then place one order for every domain that is ours. */
+export async function runBatch(orgId: string, input: OrderInput): Promise<BatchResult> {
+  const owned = new Set(listDomains(orgId).map((d) => d.domain));
+  const toBuy = input.domains.filter((d) => !owned.has(d));
+  const bought = toBuy.length ? await buyDomains(orgId, toBuy, input.tags ?? []) : [];
+  const failed = new Set(bought.filter((r) => !r.ok).map((r) => r.domain));
+  const orderDomains = input.domains.filter((d) => !failed.has(d));
+  if (orderDomains.length === 0) return { bought, order: null, orderError: 'No domain to order on: every purchase failed.' };
+  try {
+    const order = await placeOrder(orgId, { ...input, domains: orderDomains, personas: input.personas.filter((p) => orderDomains.includes(p.domain)) });
+    return { bought, order, orderError: null };
+  } catch (err) {
+    return { bought, order: null, orderError: String(err).slice(0, 300) };
+  }
+}
+
+/** The per-inbox price the provisioner charges, from the subscriptions it already bills us for. */
+export async function learnInboxPrice(orgId: string): Promise<number | null> {
+  const pi = clients.premiuminboxes(orgId);
+  const subs = await pi.subscriptions();
+  const prices = subs.flatMap((s) => s.items ?? []).filter((i) => i.type === 'plan' && i.unitPrice > 0).map((i) => i.unitPrice);
+  if (prices.length === 0) return null;
+  const counts = new Map<number, number>();
+  for (const p of prices) counts.set(p, (counts.get(p) ?? 0) + 1);
+  const best = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]![0];
+  const cfg = getIntegration(orgId, 'premiuminboxes');
+  if (cfg && cfg.pricePerInboxCents !== best) setIntegration(orgId, 'premiuminboxes', { ...cfg, pricePerInboxCents: best });
+  return best;
+}
+
+/** Store an uploaded profile picture where the provisioner can fetch it; returns its public URL. */
+export function storeProfilePicture(orgId: string, dataUrl: string): string {
+  const m = /^data:image\/(png|jpeg|jpg|webp);base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl.trim());
+  if (!m) throw new Error('The picture must be a PNG, JPEG or WebP image');
+  const buf = Buffer.from(m[2]!, 'base64');
+  if (buf.length > 4 * 1024 * 1024) throw new Error('The picture is larger than 4 MB');
+  const dir = path.join(config.dataDir, 'public');
+  fs.mkdirSync(dir, { recursive: true });
+  const name = `${orgId.slice(0, 6)}-${nanoid(10)}.${m[1] === 'jpg' ? 'jpeg' : m[1]}`;
+  fs.writeFileSync(path.join(dir, name), buf);
+  return `${config.BASE_URL.replace(/\/$/, '')}/public/${name}`;
+}
+
 export function listOrders(orgId: string): ProviderOrder[] {
   return db.select().from(schema.providerOrders).where(eq(schema.providerOrders.orgId, orgId)).all().sort((a, b) => b.createdAt - a.createdAt);
 }
@@ -293,6 +391,11 @@ export async function syncOrders(orgId: string): Promise<{ orders: number; deliv
   } catch (err) {
     markIntegration(orgId, 'premiuminboxes', { ok: false, error: String(err) });
     throw err;
+  }
+  try {
+    await learnInboxPrice(orgId);
+  } catch (err) {
+    logger.debug({ orgId, err: String(err) }, 'inbox price not learned');
   }
   const local = listOrders(orgId);
   const byExternal = new Map(local.map((o) => [o.externalId, o]));
@@ -376,6 +479,8 @@ export async function syncAllOrders(): Promise<void> {
 
 export interface DomainRow extends Domain {
   tags: string[];
+  /** Bought or ordered through this platform, as opposed to imported from the registrar or the provisioner. */
+  platform: boolean;
   dns: { verdict: 'ok' | 'warn' | 'bad' | 'unchecked'; issues: string[] };
   mailboxes: { connected: number; delivered: number };
   order: { id: string; externalId: string | null; status: string } | null;
@@ -418,6 +523,7 @@ export function domainsOverview(orgId: string): { domains: DomainRow[]; orders: 
     return { order: o, domains: domainsList, result, delivered: emails.length, connected: emails.filter((e) => connectedEmails.has(e.email.toLowerCase())).length };
   });
   const health = domainHealthFor(rows.map((d) => d.domain));
+  const importedOrder = (o: ProviderOrder | undefined) => !o || o.requestJson.includes('"importedFromProvider"');
   const domainsList: DomainRow[] = rows
     .map((d) => {
       const h = health.get(d.domain);
@@ -425,6 +531,7 @@ export function domainsOverview(orgId: string): { domains: DomainRow[]; orders: 
       return {
         ...d,
         tags: parseTags(d.tagsJson),
+        platform: !!d.registrarJson || !importedOrder(o),
         dns: { verdict: dnsVerdict(h), issues: issuesOf(h) },
         mailboxes: { connected: connectedByDomain.get(d.domain) ?? 0, delivered: deliveredByDomain.get(d.domain) ?? 0 },
         order: o ? { id: o.id, externalId: o.externalId, status: o.status } : null,

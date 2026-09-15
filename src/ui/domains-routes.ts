@@ -17,9 +17,16 @@ import {
   domainsOverview,
   orderMailboxes,
   generateMailboxPassword,
+  runBatch,
+  storeProfilePicture,
+  learnInboxPrice,
   clients,
   type Candidate,
 } from '../domains/service.js';
+import { ADDRESS_PATTERNS, localParts } from '../domains/patterns.js';
+import { config } from '../config.js';
+import fs from 'node:fs';
+import path from 'node:path';
 import { getIntegration, getIntegrationRow, setIntegration, markIntegration, deleteIntegration, mask, type PremiumInboxesConfig } from '../domains/integrations.js';
 import { DEFAULT_TLDS, parseDomainList } from '../domains/names.js';
 import { splitTagInput } from '../accounts/tags.js';
@@ -57,10 +64,35 @@ function pageLocals(req: FastifyRequest, session: SessionContext, extra: Record<
         : { configured: false, verifiedAt: null, lastError: null, tokenMasked: '', workspaceId: null, knownWorkspaces: [], hosting: { platform: 'Namecheap', username: '', password: '', namecheapBackupCodes: '' }, defaults: { emailProvider: 'Google', inboxesPerDomain: 2, prefixVariants: ['first', 'first.last'], insured: false } },
     },
     defaultTlds: DEFAULT_TLDS,
+    patterns: ADDRESS_PATTERNS,
+    pricePerInboxCents: pi?.pricePerInboxCents ?? 350,
+    showAll: (req.query as { all?: string }).all === '1',
     candidates: null as Candidate[] | null,
-    findInput: { brand: '', tlds: DEFAULT_TLDS.slice(0, 3), custom: '' },
+    wizard: wizardInput(req.body as Body | undefined, pi),
     suggestedPassword: generateMailboxPassword(),
     ...extra,
+  };
+}
+
+/** Everything typed into the batch wizard, so a "check" round-trip keeps it. */
+function wizardInput(body: Body | undefined, pi: PremiumInboxesConfig | null) {
+  const b = body ?? {};
+  const d = pi?.defaults;
+  return {
+    brand: str(b.brand),
+    tlds: list(b.tlds).length ? list(b.tlds).map((t) => t.toLowerCase()) : DEFAULT_TLDS.slice(0, 3),
+    custom: str(b.custom),
+    picked: list(b.domains),
+    emailProvider: str(b.emailProvider) || (d?.emailProvider === 'Microsoft' ? 'microsoft' : 'google'),
+    inboxesPerDomain: Number(b.inboxesPerDomain) || d?.inboxesPerDomain || 2,
+    firstName: str(b.firstName),
+    lastName: str(b.lastName),
+    patterns: list(b.patterns).length ? list(b.patterns) : d?.prefixVariants ?? ['first', 'first.last'],
+    pictureUrl: str(b.pictureUrl) || d?.profilePictureLink || '',
+    password: str(b.password),
+    insured: b.insured ? true : !!d?.insured,
+    tags: str(b.tags),
+    additionalInfo: str(b.additionalInfo),
   };
 }
 
@@ -80,10 +112,10 @@ export function registerDomainsUiRoutes(app: FastifyInstance): void {
     const custom = parseDomainList(str(body.custom));
     try {
       const candidates = custom.length ? await checkDomains(session.org.id, custom) : await findDomains(session.org.id, brand, tlds);
-      if (candidates.length === 0) return reply.redirect(back('error', 'Type a brand word or a list of domains to check.', 'find'));
-      return reply.view('domains.ejs', pageLocals(req, session, { candidates, panel: 'find', findInput: { brand, tlds, custom: custom.join('\n') } }));
+      if (candidates.length === 0) return reply.view('domains.ejs', pageLocals(req, session, { panel: 'batch', error: 'Type a brand word or paste a list of domains to check.' }));
+      return reply.view('domains.ejs', pageLocals(req, session, { candidates, panel: 'batch' }));
     } catch (err) {
-      return reply.redirect(back('error', `Namecheap: ${String(err).slice(0, 300)}`, 'find'));
+      return reply.view('domains.ejs', pageLocals(req, session, { panel: 'batch', error: `Namecheap: ${String(err).slice(0, 300)}` }));
     }
   });
 
@@ -149,6 +181,67 @@ export function registerDomainsUiRoutes(app: FastifyInstance): void {
     } catch (err) {
       return reply.redirect(back('error', `Order failed: ${String(err).slice(0, 300)}`, 'order'));
     }
+  });
+
+  // One click: register the ticked domains that are not ours yet, then order mailboxes on all of them.
+  app.post<{ Body: Body }>('/ui/domains/batch', { bodyLimit: 8 * 1024 * 1024 }, async (req, reply) => {
+    const session = guardPost(req, reply);
+    if (!session) return;
+    const body = req.body ?? {};
+    const w = wizardInput(body, getIntegration(session.org.id, 'premiuminboxes'));
+    const domains = parseDomainList(w.picked.join('\n'));
+    if (domains.length === 0) return reply.view('domains.ejs', pageLocals(req, session, { panel: 'batch', error: 'Tick at least one domain.' }));
+    if (!w.firstName || !w.lastName) return reply.view('domains.ejs', pageLocals(req, session, { panel: 'batch', error: 'The mailboxes need a first and last name.' }));
+    if (localParts(w.patterns, w.firstName, w.lastName).length === 0) return reply.view('domains.ejs', pageLocals(req, session, { panel: 'batch', error: 'Pick at least one address pattern.' }));
+    let profilePictureLink = w.pictureUrl || undefined;
+    const pictureData = str(body.pictureData);
+    if (pictureData) {
+      try {
+        profilePictureLink = storeProfilePicture(session.org.id, pictureData);
+      } catch (err) {
+        return reply.view('domains.ejs', pageLocals(req, session, { panel: 'batch', error: String(err) }));
+      }
+    }
+    const result = await runBatch(session.org.id, {
+      domains,
+      emailProvider: w.emailProvider === 'microsoft' ? 'microsoft' : 'google',
+      inboxesPerDomain: Math.max(1, Math.min(10, w.inboxesPerDomain)),
+      prefixVariants: w.patterns,
+      personas: domains.map((domain) => ({ domain, firstName: w.firstName, lastName: w.lastName })),
+      password: w.password || undefined,
+      insured: w.insured,
+      additionalInfo: w.additionalInfo || undefined,
+      tags: splitTagInput(w.tags),
+      profilePictureLink,
+    });
+    const okBuys = result.bought.filter((r) => r.ok);
+    const failedBuys = result.bought.filter((r) => !r.ok);
+    const parts: string[] = [];
+    if (result.bought.length) parts.push(`${okBuys.length} of ${result.bought.length} domain${result.bought.length === 1 ? '' : 's'} registered${failedBuys.length ? ` (${failedBuys[0]?.domain}: ${failedBuys[0]?.error})` : ''}`);
+    if (result.order) parts.push(`order ${result.order.externalId} placed for ${domains.length - failedBuys.length} domain${domains.length - failedBuys.length === 1 ? '' : 's'}; progress is checked every 10 minutes`);
+    if (result.orderError) parts.push(`the order failed: ${result.orderError}`);
+    return reply.redirect(back(result.order ? 'notice' : 'error', parts.join('. ') + '.'));
+  });
+
+  app.post('/ui/domains/price/refresh', async (req, reply) => {
+    const session = guardPost(req, reply);
+    if (!session) return;
+    try {
+      const cents = await learnInboxPrice(session.org.id);
+      return reply.redirect(back('notice', cents ? `Premium Inboxes charges ${(cents / 100).toFixed(2)} per inbox per 4 weeks on your subscriptions.` : 'No subscription with a plan price found yet; the default of 3.50 stays.'));
+    } catch (err) {
+      return reply.redirect(back('error', String(err).slice(0, 300)));
+    }
+  });
+
+  // Profile pictures uploaded for orders: public so the provisioner can fetch them.
+  app.get<{ Params: { file: string } }>('/public/:file', async (req, reply) => {
+    const name = req.params.file;
+    if (!/^[A-Za-z0-9_-]+\.(png|jpeg|webp)$/.test(name)) return reply.code(404).send('Not found');
+    const file = path.join(config.dataDir, 'public', name);
+    if (!fs.existsSync(file)) return reply.code(404).send('Not found');
+    const type = name.endsWith('.png') ? 'image/png' : name.endsWith('.webp') ? 'image/webp' : 'image/jpeg';
+    return reply.type(type).header('Cache-Control', 'public, max-age=31536000, immutable').send(fs.createReadStream(file));
   });
 
   app.post('/ui/domains/orders/sync', async (req, reply) => {

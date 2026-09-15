@@ -71,6 +71,16 @@ export interface PiOrder {
   updatedAt: string;
 }
 
+export interface PiSubscription {
+  _id: string;
+  status: string;
+  price: number;
+  discount: number;
+  items: { id: string; type: string; quantity: number; unitPrice: number; price: number }[];
+  orders?: unknown[];
+  nextBillingDate?: unknown;
+}
+
 export interface PiEmailAccount {
   orderId: string;
   workspaceId: string;
@@ -147,6 +157,12 @@ export class PremiumInboxesClient {
     const r = await this.call<string | { orderId?: string; id?: string; _id?: string }>('POST', '/client/purchase', body, { workspaceId, timeoutMs: 120_000 });
     if (typeof r === 'string') return r.replace(/^"|"$/g, '');
     return String(r.orderId ?? r.id ?? r._id ?? '');
+  }
+
+  /** Subscriptions with their plan lines; the unit price is what an inbox costs per 4 weeks, in cents. */
+  async subscriptions(workspaceId?: string | null): Promise<PiSubscription[]> {
+    const r = await this.call<{ data: PiSubscription[] }>('GET', '/client/subscription', undefined, { workspaceId });
+    return r.data ?? [];
   }
 
   async orders(workspaceId?: string | null): Promise<PiOrder[]> {
