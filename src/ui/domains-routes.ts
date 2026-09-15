@@ -68,6 +68,7 @@ function pageLocals(req: FastifyRequest, session: SessionContext, extra: Record<
     pricePerInboxCents: pi?.pricePerInboxCents ?? 350,
     showAll: (req.query as { all?: string }).all === '1',
     candidates: null as Candidate[] | null,
+    wizardError: null as string | null,
     wizard: wizardInput(req.body as Body | undefined, pi),
     suggestedPassword: generateMailboxPassword(),
     ...extra,
@@ -96,6 +97,21 @@ function wizardInput(body: Body | undefined, pi: PremiumInboxesConfig | null) {
   };
 }
 
+/** The wizard again, with an error inside it and the picked domains re-checked so nothing typed is lost. */
+async function wizardAgain(req: FastifyRequest, reply: import('fastify').FastifyReply, session: SessionContext, error: string) {
+  const w = wizardInput(req.body as Body | undefined, getIntegration(session.org.id, 'premiuminboxes'));
+  const picked = parseDomainList(w.picked.join('\n'));
+  let candidates: Candidate[] | null = null;
+  if (picked.length && getIntegration(session.org.id, 'namecheap')) {
+    try {
+      candidates = await checkDomains(session.org.id, picked);
+    } catch {
+      candidates = null;
+    }
+  }
+  return reply.view('domains.ejs', pageLocals(req, session, { panel: 'batch', wizardError: error, candidates }));
+}
+
 export function registerDomainsUiRoutes(app: FastifyInstance): void {
   app.get('/ui/domains', async (req, reply) => {
     const session = guard(req, reply);
@@ -112,10 +128,10 @@ export function registerDomainsUiRoutes(app: FastifyInstance): void {
     const custom = parseDomainList(str(body.custom));
     try {
       const candidates = custom.length ? await checkDomains(session.org.id, custom) : await findDomains(session.org.id, brand, tlds);
-      if (candidates.length === 0) return reply.view('domains.ejs', pageLocals(req, session, { panel: 'batch', error: 'Type a brand word or paste a list of domains to check.' }));
+      if (candidates.length === 0) return wizardAgain(req, reply, session, 'Type a brand word or paste a list of domains to check.');
       return reply.view('domains.ejs', pageLocals(req, session, { candidates, panel: 'batch' }));
     } catch (err) {
-      return reply.view('domains.ejs', pageLocals(req, session, { panel: 'batch', error: `Namecheap: ${String(err).slice(0, 300)}` }));
+      return wizardAgain(req, reply, session, `Namecheap: ${String(err).slice(0, 300)}`);
     }
   });
 
@@ -190,16 +206,16 @@ export function registerDomainsUiRoutes(app: FastifyInstance): void {
     const body = req.body ?? {};
     const w = wizardInput(body, getIntegration(session.org.id, 'premiuminboxes'));
     const domains = parseDomainList(w.picked.join('\n'));
-    if (domains.length === 0) return reply.view('domains.ejs', pageLocals(req, session, { panel: 'batch', error: 'Tick at least one domain.' }));
-    if (!w.firstName || !w.lastName) return reply.view('domains.ejs', pageLocals(req, session, { panel: 'batch', error: 'The mailboxes need a first and last name.' }));
-    if (localParts(w.patterns, w.firstName, w.lastName).length === 0) return reply.view('domains.ejs', pageLocals(req, session, { panel: 'batch', error: 'Pick at least one address pattern.' }));
+    if (domains.length === 0) return wizardAgain(req, reply, session, 'Tick at least one domain.');
+    if (!w.firstName || !w.lastName) return wizardAgain(req, reply, session, 'The mailboxes need a first and last name.');
+    if (localParts(w.patterns, w.firstName, w.lastName).length === 0) return wizardAgain(req, reply, session, 'Pick at least one address pattern.');
     let profilePictureLink = w.pictureUrl || undefined;
     const pictureData = str(body.pictureData);
     if (pictureData) {
       try {
         profilePictureLink = storeProfilePicture(session.org.id, pictureData);
       } catch (err) {
-        return reply.view('domains.ejs', pageLocals(req, session, { panel: 'batch', error: String(err) }));
+        return wizardAgain(req, reply, session, String(err));
       }
     }
     const result = await runBatch(session.org.id, {
@@ -220,7 +236,8 @@ export function registerDomainsUiRoutes(app: FastifyInstance): void {
     if (result.bought.length) parts.push(`${okBuys.length} of ${result.bought.length} domain${result.bought.length === 1 ? '' : 's'} registered${failedBuys.length ? ` (${failedBuys[0]?.domain}: ${failedBuys[0]?.error})` : ''}`);
     if (result.order) parts.push(`order ${result.order.externalId} placed for ${domains.length - failedBuys.length} domain${domains.length - failedBuys.length === 1 ? '' : 's'}; progress is checked every 10 minutes`);
     if (result.orderError) parts.push(`the order failed: ${result.orderError}`);
-    return reply.redirect(back(result.order ? 'notice' : 'error', parts.join('. ') + '.'));
+    if (!result.order) return wizardAgain(req, reply, session, parts.join('. ') + '.');
+    return reply.redirect(back('notice', parts.join('. ') + '.'));
   });
 
   app.post('/ui/domains/price/refresh', async (req, reply) => {

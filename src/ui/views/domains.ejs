@@ -172,6 +172,7 @@
     <input type="hidden" name="pictureData" id="pictureData">
     <header><div><h2>New batch</h2><div class="who">Domains are registered at Namecheap for one year with WhoisGuard; mailboxes are ordered at Premium Inboxes and billed by them per 4 weeks.</div></div><button type="button" class="x" data-close aria-label="Close">×</button></header>
     <div class="body">
+      <% if (wizardError) { %><div class="note bad" id="wizard-error"><b>That did not go through.</b> <%= wizardError %> Everything you entered is still here; fix it and try again.</div><% } %>
       <% if (!nc.configured) { %><div class="note bad">Namecheap is not connected: you can only order on domains already bought. Open Integrations to connect it.</div><% } %>
       <% if (!pi.configured) { %><div class="note bad">Premium Inboxes is not connected: domains can be bought but no mailboxes ordered. Open Integrations to connect it.</div><% } %>
 
@@ -205,6 +206,11 @@
         <% } %>
         </tbody>
       </table>
+      <% } %>
+      <% const known = new Set([...(candidates || []).map((c) => c.domain), ...idle.map((d) => d.domain)]); const unchecked = w.picked.filter((d) => !known.has(d)); %>
+      <% if (unchecked.length) { %>
+      <p class="muted" style="margin:0.8rem 0 0.3rem">Ticked but not checked yet, press <b>Check availability</b> for prices:</p>
+      <div class="picklist"><% for (const d of unchecked) { %><label><input type="checkbox" name="domains" value="<%= d %>" class="pick" data-price="0" checked> <%= d %></label><% } %></div>
       <% } %>
       <% if (idle.length) { %>
       <p class="muted" style="margin:0.8rem 0 0.3rem">Domains you already own with no mailboxes yet, free to add to this batch:</p>
@@ -243,7 +249,11 @@
     </div>
     <footer>
       <span class="left" id="batch-summary"></span>
-      <button type="button" class="secondary" data-close>Cancel</button>
+      <button type="button" class="secondary" id="batch-export" title="Download this batch as JSON">Export JSON</button>
+      <button type="button" class="secondary" id="batch-import-btn" title="Load a batch from JSON">Import JSON</button>
+      <input type="file" id="batch-import" accept="application/json,.json" hidden>
+      <button type="button" class="secondary" id="batch-clear" title="Forget the autosaved draft and start empty">Clear</button>
+      <button type="button" class="secondary" data-close>Close</button>
       <button type="submit" class="bigbtn" id="batch-submit" <%= pi.configured ? '' : 'disabled title="Connect Premium Inboxes first"' %>>Buy &amp; order</button>
     </footer>
   </form>
@@ -444,6 +454,59 @@
     const per = Math.max(1, Number(document.getElementById('perDomain').value || 1));
     if (!confirm((buy ? 'Register ' + buy + ' domain(s) at Namecheap now and ' : '') + 'order ' + on.length * per + ' mailbox(es) at Premium Inboxes? Both are billed to your accounts there.')) e.preventDefault();
   });
+  // ---- draft: autosaved in the browser, exportable as JSON -----------------
+  const DRAFT = 'oem.batch.draft';
+  const FIELDS = ['brand', 'custom', 'emailProvider', 'inboxesPerDomain', 'password', 'firstName', 'lastName', 'tags', 'pictureUrl', 'additionalInfo'];
+  function state() {
+    const s = { version: 1 };
+    for (const k of FIELDS) { const el = form.querySelector('[name=' + k + ']'); if (el) s[k] = el.value; }
+    s.tlds = Array.from(form.querySelectorAll('[name=tlds]:checked')).map((c) => c.value);
+    s.patterns = Array.from(form.querySelectorAll('[name=patterns]:checked')).map((c) => c.value);
+    s.insured = !!form.querySelector('[name=insured]:checked');
+    s.domains = picks().filter((c) => c.checked).map((c) => c.value);
+    return s;
+  }
+  function apply(s) {
+    for (const k of FIELDS) { const el = form.querySelector('[name=' + k + ']'); if (el && s[k] !== undefined) el.value = s[k]; }
+    if (Array.isArray(s.tlds)) form.querySelectorAll('[name=tlds]').forEach((c) => { c.checked = s.tlds.includes(c.value); });
+    if (Array.isArray(s.patterns)) form.querySelectorAll('[name=patterns]').forEach((c) => { c.checked = s.patterns.includes(c.value); });
+    const ins = form.querySelector('[name=insured]'); if (ins && s.insured !== undefined) ins.checked = !!s.insured;
+    if (Array.isArray(s.domains)) {
+      const have = new Set(picks().map((c) => c.value));
+      picks().forEach((c) => { c.checked = s.domains.includes(c.value); });
+      // Domains the page does not list yet go into the paste box, to be checked.
+      const missing = s.domains.filter((d) => !have.has(d));
+      if (missing.length) { const custom = form.querySelector('[name=custom]'); custom.value = [custom.value, missing.join(', ')].filter(Boolean).join(', '); }
+    }
+    if (s.pictureUrl) { preview.src = s.pictureUrl; preview.hidden = false; }
+    previews(); cost();
+  }
+  const save = () => { try { localStorage.setItem(DRAFT, JSON.stringify(state())); } catch (e) {} };
+  form.addEventListener('input', save);
+  form.addEventListener('change', save);
+  const serverHasState = <%- JSON.stringify(!!(wizard.brand || wizard.custom || wizard.firstName || (wizard.picked && wizard.picked.length))) %>;
+  if (!serverHasState) {
+    try { const d = JSON.parse(localStorage.getItem(DRAFT) || 'null'); if (d && d.version === 1) apply(d); } catch (e) {}
+  } else save();
+  document.getElementById('batch-export').addEventListener('click', () => {
+    const blob = new Blob([JSON.stringify(state(), null, 2)], { type: 'application/json' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'batch-' + (state().brand || 'domains') + '.json'; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
+  document.getElementById('batch-import-btn').addEventListener('click', () => document.getElementById('batch-import').click());
+  document.getElementById('batch-import').addEventListener('change', (e) => {
+    const f = e.target.files && e.target.files[0]; if (!f) return;
+    const r = new FileReader();
+    r.onload = () => { try { apply(JSON.parse(String(r.result))); save(); } catch (err) { alert('That file is not a batch JSON.'); } };
+    r.readAsText(f); e.target.value = '';
+  });
+  document.getElementById('batch-clear').addEventListener('click', () => {
+    if (!confirm('Clear the batch and forget the autosaved draft?')) return;
+    try { localStorage.removeItem(DRAFT); } catch (e) {}
+    form.reset(); picks().forEach((c) => { c.checked = false; }); picData.value = ''; preview.hidden = true; previews(); cost();
+  });
+  // A placed order empties the draft (the page reloads with a notice and no wizard state).
+  <% if (notice && /order .* placed/.test(notice)) { %>try { localStorage.removeItem(DRAFT); } catch (e) {}<% } %>
+  const werr = document.getElementById('wizard-error'); if (werr) werr.scrollIntoView({ block: 'start' });
   previews(); cost();
 })();
 </script>
