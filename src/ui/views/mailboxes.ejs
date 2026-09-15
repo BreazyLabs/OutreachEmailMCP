@@ -63,17 +63,21 @@
   /* dialogs: modal in the middle, slide-over on the right */
   dialog { border:1px solid var(--line); border-radius:12px; padding:0; background:var(--card); color:var(--fg); box-shadow:0 20px 60px rgba(0,0,0,0.25); }
   dialog::backdrop { background:rgba(10,10,20,0.45); }
-  dialog.modal { width:min(640px, calc(100vw - 2rem)); max-height:calc(100vh - 3rem); }
+  dialog.modal { width:min(640px, calc(100vw - 2rem)); max-height:calc(100vh - 3rem); overflow:hidden; }
   dialog.modal.wide { width:min(820px, calc(100vw - 2rem)); }
   dialog.slide { position:fixed; inset:0 0 0 auto; margin:0; height:100vh; max-height:100vh; width:min(760px, 100vw); border-radius:0; border-width:0 0 0 1px; transform:translateX(100%); transition:transform 0.22s ease; }
   dialog.slide[open] { transform:none; }
   dialog.slide.xl { width:min(1040px, 100vw); }
   @media (prefers-reduced-motion: reduce) { dialog.slide { transition:none; } }
-  .dlg { display:flex; flex-direction:column; max-height:inherit; height:100%; }
+  /* Explicit heights: a flex:1 body inside an auto-height column collapses
+     to nothing in Safari, which showed the modal as a single line. */
+  .dlg { display:flex; flex-direction:column; }
+  dialog.modal .dlg { max-height:calc(100vh - 3rem); }
+  dialog.slide .dlg { height:100vh; }
   .dlg header { display:flex; align-items:flex-start; justify-content:space-between; gap:1rem; padding:1rem 1.2rem 0.7rem; border-bottom:1px solid var(--line); }
   .dlg header h2 { margin:0; font-size:1.05rem; }
   .dlg header .who { color:var(--muted); font-size:0.8rem; margin-top:0.25rem; max-width:70ch; }
-  .dlg .body { padding:1rem 1.2rem; overflow:auto; flex:1; }
+  .dlg .body { padding:1rem 1.2rem; overflow:auto; flex:1 1 auto; min-height:0; }
   .dlg footer { display:flex; gap:0.5rem; align-items:center; justify-content:flex-end; padding:0.7rem 1.2rem; border-top:1px solid var(--line); flex-wrap:wrap; }
   .dlg footer .left { margin-right:auto; color:var(--muted); font-size:0.8rem; }
   .x { background:transparent; border:none; color:var(--muted); font-size:1.3rem; line-height:1; cursor:pointer; padding:0.1rem 0.3rem; }
