@@ -268,3 +268,24 @@ describe('address patterns and one-click batches', () => {
     expect(service.domainsOverview(orgId).domains.every((d) => d.platform)).toBe(true);
   });
 });
+
+describe('Namecheap registration without WhoisGuard', () => {
+  it('retries a TLD that refuses WhoisGuard, and gives up on any other error', async () => {
+    const { NamecheapClient } = await import('../domains/namecheap.js');
+    const cfg = { apiUser: 'u', apiKey: 'k', username: 'u', clientIp: '1.2.3.4', contact: { firstName: 'D', lastName: 'T', address1: 'S 1', city: 'A', stateProvince: 'NH', postalCode: '1', country: 'NL', phone: '+31.612345678', email: 'd@x.test' } };
+    const attempts: string[] = [];
+    const client = new NamecheapClient(cfg, fakeFetch((url) => {
+      const u = new URL(url);
+      attempts.push(u.searchParams.get('AddFreeWhoisguard')!);
+      if (u.searchParams.get('AddFreeWhoisguard') === 'yes') {
+        return { body: `<?xml version="1.0"?><ApiResponse Status="ERROR"><Errors><Error Number="2011170">This TLD 'nl' does not support adding or enabling Free whoisguard, domain: x.nl</Error></Errors></ApiResponse>` };
+      }
+      return { body: xml('<DomainCreateResult Domain="x.nl" Registered="true" ChargedAmount="7.48" DomainID="1" OrderID="2" TransactionID="3" WhoisguardEnable="false" />') };
+    }));
+    const r = await client.register('x.nl');
+    expect(attempts).toEqual(['yes', 'no']);
+    expect(r).toMatchObject({ registered: true, whoisGuard: false });
+    const failing = new NamecheapClient(cfg, fakeFetch(() => ({ body: `<?xml version="1.0"?><ApiResponse Status="ERROR"><Errors><Error Number="2030280">Insufficient funds</Error></Errors></ApiResponse>` })));
+    await expect(failing.register('y.nl')).rejects.toThrow(/Insufficient funds/);
+  });
+});

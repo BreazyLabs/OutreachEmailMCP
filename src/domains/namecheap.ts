@@ -161,13 +161,23 @@ export class NamecheapClient {
       contact[`${role}Phone`] = c.phone;
       contact[`${role}EmailAddress`] = c.email;
     }
-    const r = await this.call('namecheap.domains.create', {
-      DomainName: domain,
-      Years: String(years),
-      AddFreeWhoisguard: 'yes',
-      WGEnabled: 'yes',
-      ...contact,
-    });
+    const create = (whoisGuard: boolean) =>
+      this.call('namecheap.domains.create', {
+        DomainName: domain,
+        Years: String(years),
+        AddFreeWhoisguard: whoisGuard ? 'yes' : 'no',
+        WGEnabled: whoisGuard ? 'yes' : 'no',
+        ...contact,
+      });
+    let r: Record<string, unknown>;
+    try {
+      r = await create(true);
+    } catch (err) {
+      // Country TLDs such as .nl and .de publish their own registrant rules
+      // and refuse WhoisGuard; register those without it.
+      if (err instanceof NamecheapError && /whoisguard/i.test(err.message)) r = await create(false);
+      else throw err;
+    }
     const d = asArray(r.DomainCreateResult as Record<string, string> | Record<string, string>[])[0];
     if (!d) throw new NamecheapError('Namecheap returned no registration result');
     return {
