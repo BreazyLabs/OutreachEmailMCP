@@ -11,12 +11,15 @@
   const dnsBad = overview.accounts.filter((a) => a.dns.verdict === 'bad');
   const dnsUnchecked = overview.accounts.filter((a) => a.dns.verdict === 'unchecked');
   const needsAttention = overview.accounts.filter((a) => a.accountStatus !== 'active');
+  const mix = overview.content.mix; const totalMix = mix.llm + mix.template;
 %>
 <style>
-  .pagehead { display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap; }
+  .pagehead { display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap; margin-bottom:0.2rem; }
   .pagehead h1 { margin:0.4rem 0; }
-  .lead { max-width:78ch; margin:0.2rem 0 1rem; }
-  .kpis { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:0.7rem; }
+  .pagehead .row { gap:0.4rem; }
+  .btn.ghost, button.ghost { background:transparent; color:var(--fg); border:1px solid var(--line); }
+  .btn.ghost:hover, button.ghost:hover { border-color:var(--accent); color:var(--accent); }
+  .kpis { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:0.7rem; margin-top:0.8rem; }
   .kpi { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:0.65rem 0.85rem; }
   .kpi .n { font-size:1.35rem; font-weight:700; font-variant-numeric:tabular-nums; line-height:1.15; }
   .kpi .n small { font-size:0.8rem; color:var(--muted); font-weight:500; }
@@ -39,16 +42,42 @@
   .toolbar input[type=search] { min-width:220px; }
   .toolbar .sel { display:flex; gap:0.3rem; align-items:center; margin-left:auto; }
   .toolbar .sel button { padding:0.3rem 0.6rem; font-size:0.78rem; }
-  .bulkbar { position:sticky; top:0; z-index:5; display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap; padding:0.55rem 0.7rem; border:1px solid var(--line); border-radius:8px; background:var(--card); margin:0.5rem 0; box-shadow:0 2px 10px rgba(0,0,0,0.05); }
-  .bulkbar.has { border-color:color-mix(in srgb, var(--accent) 45%, var(--line)); background:color-mix(in srgb, var(--accent) 6%, var(--card)); }
-  .bulkbar .count { font-weight:700; min-width:9ch; }
-  .bulkbar button { padding:0.35rem 0.75rem; font-size:0.8rem; }
-  .bulkbar .tabs { margin-left:auto; display:flex; gap:0.3rem; }
-  .bulkbar .tabs button.on { background:var(--accent); color:#fff; border-color:var(--accent); }
-  .selpanel { border:1px solid color-mix(in srgb, var(--accent) 35%, var(--line)); border-radius:10px; padding:0.9rem 1rem; margin:0.4rem 0 0.8rem; background:color-mix(in srgb, var(--accent) 3%, var(--card)); }
-  .selpanel[hidden] { display:none; }
-  .selpanel h3 { margin:0 0 0.5rem; font-size:0.95rem; }
-  .selpanel .who { color:var(--muted); font-size:0.8rem; margin-bottom:0.6rem; }
+  /* selection bar */
+  .selbar { position:sticky; top:0.5rem; z-index:5; display:flex; gap:0.4rem; align-items:center; flex-wrap:wrap; padding:0.5rem 0.7rem; border:1px solid var(--line); border-radius:10px; background:var(--card); margin:0.5rem 0; box-shadow:0 4px 18px rgba(0,0,0,0.07); }
+  .selbar.has { border-color:color-mix(in srgb, var(--accent) 45%, var(--line)); background:color-mix(in srgb, var(--accent) 6%, var(--card)); }
+  .selbar .count { font-weight:700; padding:0.2rem 0.6rem; border-radius:99px; background:color-mix(in srgb, var(--accent) 14%, transparent); color:var(--accent); font-variant-numeric:tabular-nums; }
+  .selbar .hint { color:var(--muted); font-size:0.82rem; }
+  .selbar button { padding:0.38rem 0.75rem; font-size:0.82rem; }
+  .selbar .actions { display:flex; gap:0.35rem; flex-wrap:wrap; margin-left:auto; }
+  .selbar .actions[hidden] { display:none; }
+  .selbar .clear { background:transparent; border:none; color:var(--muted); padding:0.2rem 0.4rem; cursor:pointer; font-size:0.82rem; }
+  details.menu { position:relative; }
+  details.menu > summary { list-style:none; cursor:pointer; display:inline-block; background:var(--accent); color:#fff; padding:0.38rem 0.75rem; border-radius:7px; font-size:0.82rem; }
+  details.menu > summary::-webkit-details-marker { display:none; }
+  details.menu > summary::after { content:" ▾"; font-size:0.7rem; }
+  details.menu .items { position:absolute; top:calc(100% + 4px); left:0; min-width:230px; background:var(--card); border:1px solid var(--line); border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,0.12); padding:0.3rem; z-index:20; display:flex; flex-direction:column; }
+  details.menu .items button { background:transparent; color:var(--fg); text-align:left; border:none; padding:0.45rem 0.6rem; border-radius:6px; font-size:0.85rem; }
+  details.menu .items button:hover { background:color-mix(in srgb, var(--accent) 10%, transparent); }
+  details.menu .items button small { display:block; color:var(--muted); font-size:0.72rem; }
+  details.menu .items hr { border:none; border-top:1px solid var(--line); margin:0.25rem 0; }
+  /* dialogs: modal in the middle, slide-over on the right */
+  dialog { border:1px solid var(--line); border-radius:12px; padding:0; background:var(--card); color:var(--fg); box-shadow:0 20px 60px rgba(0,0,0,0.25); }
+  dialog::backdrop { background:rgba(10,10,20,0.45); }
+  dialog.modal { width:min(640px, calc(100vw - 2rem)); max-height:calc(100vh - 3rem); }
+  dialog.modal.wide { width:min(820px, calc(100vw - 2rem)); }
+  dialog.slide { position:fixed; inset:0 0 0 auto; margin:0; height:100vh; max-height:100vh; width:min(760px, 100vw); border-radius:0; border-width:0 0 0 1px; transform:translateX(100%); transition:transform 0.22s ease; }
+  dialog.slide[open] { transform:none; }
+  dialog.slide.xl { width:min(1040px, 100vw); }
+  @media (prefers-reduced-motion: reduce) { dialog.slide { transition:none; } }
+  .dlg { display:flex; flex-direction:column; max-height:inherit; height:100%; }
+  .dlg header { display:flex; align-items:flex-start; justify-content:space-between; gap:1rem; padding:1rem 1.2rem 0.7rem; border-bottom:1px solid var(--line); }
+  .dlg header h2 { margin:0; font-size:1.05rem; }
+  .dlg header .who { color:var(--muted); font-size:0.8rem; margin-top:0.25rem; max-width:70ch; }
+  .dlg .body { padding:1rem 1.2rem; overflow:auto; flex:1; }
+  .dlg footer { display:flex; gap:0.5rem; align-items:center; justify-content:flex-end; padding:0.7rem 1.2rem; border-top:1px solid var(--line); flex-wrap:wrap; }
+  .dlg footer .left { margin-right:auto; color:var(--muted); font-size:0.8rem; }
+  .x { background:transparent; border:none; color:var(--muted); font-size:1.3rem; line-height:1; cursor:pointer; padding:0.1rem 0.3rem; }
+  .x:hover { color:var(--fg); }
   .minikpis { display:flex; gap:1.2rem; flex-wrap:wrap; font-size:0.9rem; margin-bottom:0.6rem; }
   .minikpis b { font-variant-numeric:tabular-nums; }
   .chips { display:flex; gap:0.4rem; flex-wrap:wrap; align-items:center; }
@@ -58,10 +87,10 @@
   .chip small { color:var(--muted); font-weight:500; }
   .tag { display:inline-block; padding:0 0.45rem; border-radius:99px; font-size:0.7rem; background:color-mix(in srgb, var(--accent) 12%, transparent); color:var(--accent); cursor:pointer; margin-left:0.2rem; vertical-align:1px; }
   .tag:hover { background:color-mix(in srgb, var(--accent) 22%, transparent); }
-  details.panel summary { cursor:pointer; font-weight:600; font-size:0.9rem; }
-  details.section { margin:1rem 0; }
-  details.section > summary { cursor:pointer; font-weight:600; font-size:1.05rem; padding:0.4rem 0; }
-  details.section > summary .muted { font-weight:400; }
+  .formats { display:grid; grid-template-columns:repeat(auto-fill, minmax(160px, 1fr)); gap:0.5rem; }
+  .formats button, .formats .btn { width:100%; padding:0.6rem; text-align:center; }
+  .field { display:grid; gap:0.25rem; margin-bottom:0.7rem; }
+  .field label { font-size:0.78rem; color:var(--muted); }
   th.sortable { cursor:pointer; user-select:none; } th.sortable:hover { color:var(--fg); }
   th.sortable[data-dir="asc"]::after { content:" ▲"; font-size:0.65rem; } th.sortable[data-dir="desc"]::after { content:" ▼"; font-size:0.65rem; }
   tr.dim td { opacity:0.55; } tr.hidden { display:none; }
@@ -74,19 +103,23 @@
   .reasons { color:var(--muted); font-size:0.74rem; max-width:32ch; line-height:1.3; }
   .mini { font-size:0.75rem; color:var(--muted); }
   #sel-table td, #sel-table th { padding:0.35rem 0.5rem; }
+  .note { border-radius:8px; padding:0.6rem 0.8rem; font-size:0.85rem; margin:0 0 0.8rem; background:color-mix(in srgb, var(--warn) 12%, transparent); color:var(--warn); }
+  .note.ok { background:color-mix(in srgb, var(--ok) 12%, transparent); color:var(--ok); }
+  .note.bad { background:color-mix(in srgb, var(--err) 12%, transparent); color:var(--err); }
 </style>
 
 <div class="pagehead">
   <h1>Mailboxes</h1>
   <div class="row">
-    <% if (googleEnabled) { %><a class="btn" href="/auth/google/start">+ Connect Gmail</a><% } %>
-    <% if (microsoftEnabled) { %><a class="btn" href="/auth/microsoft/start">+ Connect Microsoft</a><% } %>
+    <% if (googleEnabled) { %><a class="btn" href="/auth/google/start">+ Gmail</a><% } %>
+    <% if (microsoftEnabled) { %><a class="btn" href="/auth/microsoft/start">+ Microsoft</a><% } %>
     <% if (!googleEnabled && !microsoftEnabled) { %><span class="muted">No OAuth providers configured — set GOOGLE_CLIENT_ID/SECRET or MICROSOFT_CLIENT_ID/SECRET</span><% } %>
-    <% if (connectLinks.hub || overview.accounts.length > 0) { %><a class="btn secondary" style="color:inherit" href="#onboarding" onclick="document.getElementById('onboarding').open = true">Onboarding link &amp; exports</a><% } %>
+    <% if (connectLinks.hub) { %><button type="button" class="ghost" data-open="dlg-onboard">Onboarding link</button><% } %>
+    <% if (overview.accounts.length > 0) { %><button type="button" class="ghost" data-open="dlg-workspace">Workspace settings</button><% } %>
   </div>
 </div>
-<p class="muted lead">
-  Every connected mailbox, with its warmup health. Enabled mailboxes write to each other in short, human-looking threads and every message is tracked to where it landed; spam placements are rescued, and none of it shows up in your API, IMAP, webhooks or stats. Select mailboxes to see their combined chart and change them together.
+<p class="muted" style="max-width:78ch; margin:0.2rem 0 0.8rem">
+  Every connected mailbox with its warmup health. Tick mailboxes to chart, export, tag or change them together; every change opens in a panel so the table stays a table.
 </p>
 
 <% if (!engineEnabled) { %>
@@ -108,52 +141,7 @@
 </div>
 <% } %>
 
-<% if (connectLinks.hub || overview.accounts.length > 0) { %>
-<details class="card" id="onboarding" style="padding-top:0.7rem; padding-bottom:0.7rem">
-  <summary style="cursor:pointer; font-weight:600">Onboarding link &amp; sequencer exports</summary>
-  <% if (connectLinks.hub) { %>
-  <div style="margin-top:0.8rem">
-    <strong>Onboarding link</strong>
-    <p class="muted" style="margin:0.25rem 0 0; max-width:62ch">Hand this one URL to whoever adds mailboxes (a person, a VA, or an automation). It never expires and is <strong>not used up</strong> — opening it again adds the next mailbox. No admin login needed.</p>
-    <div class="row" style="margin-top:0.5rem">
-      <input class="mono" readonly value="<%= connectLinks.hub %>" onclick="this.select()" style="flex:1">
-      <a class="btn secondary" style="color:inherit" href="<%= connectLinks.hub %>" target="_blank" rel="noopener">Open</a>
-      <form method="post" action="/ui/connect-links/revoke" onsubmit="return confirm('Revoke every connect link issued so far? Anyone still holding an old link will have to be given the new one.')">
-        <input type="hidden" name="_csrf" value="<%= csrf %>">
-        <button class="secondary" type="submit">Revoke &amp; regenerate</button>
-      </form>
-    </div>
-    <details style="margin-top:0.6rem">
-      <summary class="muted" style="cursor:pointer">Provider-specific links (skip the chooser page)</summary>
-      <% if (connectLinks.google) { %>
-      <div class="row" style="margin:0.5rem 0 0.4rem"><span style="min-width:75px">Gmail</span><input class="mono" readonly value="<%= connectLinks.google %>" onclick="this.select()" style="flex:1"></div>
-      <% } %>
-      <% if (connectLinks.microsoft) { %>
-      <div class="row"><span style="min-width:75px">Microsoft</span><input class="mono" readonly value="<%= connectLinks.microsoft %>" onclick="this.select()" style="flex:1"></div>
-      <% } %>
-      <p class="muted" style="margin:0.5rem 0 0">Also reusable, but they expire (default 7 days, <code>CONNECT_LINK_TTL_HOURS</code>) and go straight to one provider.</p>
-    </details>
-  </div>
-  <% } %>
-  <% if (overview.accounts.length > 0) { %>
-  <div style="margin-top:1rem">
-    <strong>Connect to your sequencer</strong>
-    <p class="muted" style="margin:0.25rem 0 0.5rem">A bulk-import CSV of <em>every</em> mailbox with its proxy SMTP + IMAP credentials, pre-formatted for your tool. To export only some, select them in the table and use Export.</p>
-    <% if (missingNames.length) { %>
-    <div class="alert error" style="margin:0.4rem 0 0.6rem"><%= missingNames.length %> mailbox<%= missingNames.length === 1 ? ' has' : 'es have' %> no full name on file, and Instantly rejects rows without a first and last name: <%= missingNames.slice(0, 6).map((m) => m.email).join(', ') %><%= missingNames.length > 6 ? ` and ${missingNames.length - 6} more` : '' %>. Select them and use Export → "Fetch names from the provider", or set the name on the account page.</div>
-    <% } %>
-    <div class="row">
-      <% for (const [format, label] of Object.entries(sequencers)) { %>
-        <a class="btn <%= format === 'generic' ? 'secondary' : '' %>" style="<%= format === 'generic' ? 'color:inherit' : '' %>" href="/ui/accounts.csv?format=<%= format %>">⬇ <%= label %></a>
-      <% } %>
-    </div>
-  </div>
-  <% } %>
-</details>
-<% } %>
-
 <% if (overview.accounts.length > 0) { %>
-<h2 style="margin-top:1.2rem">Health</h2>
 <div class="kpis">
   <div class="kpi <%= orgHealth.label === 'healthy' ? 'good' : orgHealth.label === 'watch' ? 'warn' : orgHealth.label === 'at_risk' ? 'bad' : '' %>">
     <div class="n"><%= orgHealth.score === null ? '—' : orgHealth.score %><% if (orgHealth.score !== null) { %><small>/100</small><% } %></div>
@@ -176,7 +164,7 @@
 <div class="card">
   <div class="row" style="justify-content:space-between">
     <strong>Placement per day · last 30 days · all mailboxes</strong>
-    <span class="muted">hover a bar for the day's numbers · select mailboxes below for their own chart</span>
+    <span class="muted">hover a bar for the day's numbers · select mailboxes for their own chart</span>
   </div>
   <div style="margin-top:0.5rem"><%- chart %></div>
   <div class="legend"><% for (const l of chartLegend) { %><span style="--c:<%= l.color %>"><%= l.label %></span><% } %></div>
@@ -205,81 +193,32 @@
       <div class="sel">
         <span class="muted" id="visible-count"></span>
         <button type="button" class="secondary" data-sel="all">Select shown</button>
-        <button type="button" class="secondary" data-sel="none">None</button>
         <button type="button" class="secondary" data-sel="invert">Invert</button>
+        <button type="submit" formaction="/ui/warmup/dns/recheck" class="secondary" title="SPF, DKIM, DMARC and MX are checked every 6 hours; this checks now">Re-check DNS</button>
       </div>
     </div>
-    <div class="row" style="justify-content:space-between; margin:0 0 0.2rem">
-      <span class="muted">DNS: <b>S</b>PF · D<b>K</b>IM · <b>D</b>MARC, capital = present, checked every 6 hours.<%= dnsUnchecked.length ? ` ${dnsUnchecked.length} not checked yet.` : '' %> Click a tag to filter by it.</span>
-      <button type="submit" formaction="/ui/warmup/dns/recheck" class="secondary" style="padding:0.3rem 0.6rem; font-size:0.78rem">Re-check DNS now</button>
-    </div>
 
-    <div class="bulkbar" id="bulkbar">
+    <div class="selbar" id="selbar">
       <span class="count"><span id="sel-count">0</span> selected</span>
-      <button type="submit" name="action" value="enable">Enable</button>
-      <button type="submit" name="action" value="pause" class="secondary">Pause</button>
-      <button type="submit" name="action" value="resume" class="secondary">Resume</button>
-      <button type="submit" name="action" value="disable" class="secondary">Disable</button>
-      <div class="tabs">
-        <button type="button" class="secondary" data-panel="details">Details &amp; chart</button>
-        <button type="button" class="secondary" data-panel="tags">Tags</button>
-        <button type="button" class="secondary" data-panel="settings">Settings</button>
-        <button type="button" class="secondary" data-panel="export">Export</button>
+      <span class="hint" id="sel-hint">Tick mailboxes to chart, export, tag or change them together.</span>
+      <button type="button" class="clear" id="sel-clear" hidden>clear</button>
+      <div class="actions" id="sel-actions" hidden>
+        <button type="button" class="ghost" data-open="dlg-details">Details &amp; chart</button>
+        <details class="menu" id="warm-menu">
+          <summary>Warmup</summary>
+          <div class="items">
+            <button type="submit" name="action" value="enable">Enable<small>Join the pool; today is planned within a minute</small></button>
+            <button type="submit" name="action" value="pause">Pause<small>Keep engaging with received mail, start nothing new</small></button>
+            <button type="submit" name="action" value="resume">Resume<small>Lift a pause, manual or automatic</small></button>
+            <hr>
+            <button type="submit" name="action" value="disable" data-confirm="Disable warmup for {n} mailbox(es)? Pending conversations are dropped; history is kept.">Disable<small>Leave the pool</small></button>
+          </div>
+        </details>
+        <button type="button" class="ghost" data-open="dlg-settings">Settings</button>
+        <button type="button" class="ghost" data-open="dlg-tags">Tags</button>
+        <button type="button" class="ghost" data-open="dlg-names">Names</button>
+        <button type="button" data-open="dlg-export">Export</button>
       </div>
-    </div>
-
-    <div class="selpanel" id="selpanel" hidden>
-      <div class="who" id="sel-who"></div>
-      <section id="panel-details" hidden>
-        <div class="minikpis" id="sel-kpis"></div>
-        <div id="sel-chart"></div>
-        <div class="legend"><% for (const l of chartLegend) { %><span style="--c:<%= l.color %>"><%= l.label %></span><% } %></div>
-        <div style="overflow-x:auto; margin-top:0.7rem">
-          <table id="sel-table">
-            <thead><tr><th>Mailbox</th><th>State</th><th class="num">Day</th><th class="num">Today</th><th class="num">Received</th><th class="num">Inbox 7d</th><th class="num">Spam 7d</th><th class="num">Replies</th><th>Last event</th><th>Tags</th></tr></thead>
-            <tbody></tbody>
-          </table>
-        </div>
-      </section>
-      <section id="panel-tags" hidden>
-        <h3>Tags on the selected mailboxes</h3>
-        <p class="muted" style="margin:0 0 0.5rem">Tags bundle mailboxes per campaign, client or batch: filter by a tag above, then act on the bundle. Tick a tag to remove it from every selected mailbox; type new ones to add them to all of them.</p>
-        <div class="chips" id="sel-tags"></div>
-        <div class="row" style="margin-top:0.7rem">
-          <input name="tags_add" list="taglist" placeholder="Add tags, comma separated (e.g. campaign-a, q4)" style="min-width:320px" autocomplete="off">
-          <datalist id="taglist"><% for (const tg of tags) { %><option value="<%= tg.tag %>"><% } %></datalist>
-          <button type="submit" name="action" value="tags">Save tags</button>
-        </div>
-      </section>
-      <section id="panel-export" hidden>
-        <h3>Export the selected mailboxes to a sequencer</h3>
-        <p class="muted" style="margin:0 0 0.6rem">A bulk-import CSV with each selected mailbox's proxy SMTP + IMAP credentials, name and address, laid out for the tool. Mailboxes without a credential get one generated.</p>
-        <div class="row">
-          <% for (const [format, label] of Object.entries(sequencers)) { %>
-            <button type="submit" formaction="/ui/accounts.csv" name="format" value="<%= format %>" class="<%= format === 'generic' ? 'secondary' : '' %>">⬇ <%= label %></button>
-          <% } %>
-        </div>
-        <div id="sel-names" class="muted" style="margin-top:0.7rem"></div>
-        <div class="row" style="margin-top:0.5rem">
-          <button type="submit" name="action" value="refresh_profile" class="secondary">Fetch names from the provider</button>
-          <span class="muted">Reads the send-as name from Gmail or the directory entry from Microsoft 365 and stores it. Instantly requires both a first and a last name.</span>
-        </div>
-        <div class="row" style="margin-top:0.5rem">
-          <input name="names_first" placeholder="First name" style="width:150px" autocomplete="off">
-          <input name="names_last" placeholder="Last name" style="width:150px" autocomplete="off">
-          <button type="submit" name="action" value="names" class="secondary">Set on all selected</button>
-          <span class="muted">One person across several domains: search their address, select all shown, set the name once. A blank field is left as it is.</span>
-        </div>
-      </section>
-      <section id="panel-settings" hidden>
-        <h3>Settings for the selected mailboxes</h3>
-        <p class="muted" style="margin:0 0 0.8rem">Sets a per-mailbox override for each field you fill in, on every selected mailbox. Placeholders show the workspace default; the workspace defaults themselves are <a href="#defaults" onclick="document.getElementById('defaults').open = true">further down</a>.</p>
-        <%- include('_warmup-fields', { fields, values: {}, baseline: orgResolved, mode: 'bulk', sources: null }) %>
-        <div class="row" style="margin-top:0.8rem">
-          <button type="submit" name="action" value="settings">Apply to selected</button>
-          <button type="submit" name="action" value="clear_overrides" class="secondary" title="Remove every per-mailbox setting so the workspace defaults apply">Clear all overrides on selected</button>
-        </div>
-      </section>
     </div>
 
     <div style="overflow-x:auto">
@@ -290,7 +229,7 @@
         <th class="sortable" data-key="email">Mailbox</th>
         <th class="sortable" data-key="health">Health</th>
         <th class="sortable" data-key="state">State</th>
-        <th class="sortable" data-key="dns" title="SPF, DKIM, DMARC and MX of the sending domain">DNS</th>
+        <th class="sortable" data-key="dns" title="SPF, DKIM, DMARC and MX of the sending domain — capital = present, checked every 6 hours">DNS</th>
         <th>Trend 14d</th>
         <th class="sortable num" data-key="inbox">Inbox 7d</th>
       </tr>
@@ -335,81 +274,219 @@
       </tbody>
     </table>
     </div>
+    <% if (dnsUnchecked.length) { %><p class="mini" style="margin:0.5rem 0 0"><%= dnsUnchecked.length %> domain<%= dnsUnchecked.length === 1 ? '' : 's' %> not checked yet.</p><% } %>
     <% } %>
   </div>
+
+  <%# ---- dialogs that act on the selection (inside the form so the ticked rows travel with them) ---- %>
+  <dialog class="slide xl" id="dlg-details">
+    <div class="dlg">
+      <header><div><h2>Details &amp; chart</h2><div class="who" data-who></div></div><button type="button" class="x" data-close aria-label="Close">×</button></header>
+      <div class="body">
+        <div class="minikpis" id="sel-kpis"></div>
+        <div id="sel-chart"></div>
+        <div class="legend"><% for (const l of chartLegend) { %><span style="--c:<%= l.color %>"><%= l.label %></span><% } %></div>
+        <div style="overflow-x:auto; margin-top:0.9rem">
+          <table id="sel-table">
+            <thead><tr><th>Mailbox</th><th>State</th><th class="num">Day</th><th class="num">Today</th><th class="num">Received</th><th class="num">Inbox 7d</th><th class="num">Spam 7d</th><th class="num">Replies</th><th>Last event</th><th>Tags</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <footer><span class="left">Open a mailbox for its full history, persona and credentials.</span><button type="button" class="secondary" data-close>Close</button></footer>
+    </div>
+  </dialog>
+
+  <dialog class="slide" id="dlg-settings">
+    <div class="dlg">
+      <header><div><h2>Warmup settings for the selection</h2><div class="who" data-who></div></div><button type="button" class="x" data-close aria-label="Close">×</button></header>
+      <div class="body">
+        <p class="muted" style="margin:0 0 0.8rem">Each field you fill in becomes a per-mailbox override on every selected mailbox. Placeholders show the workspace default; the defaults themselves are under <b>Workspace settings</b>.</p>
+        <%- include('_warmup-fields', { fields, values: {}, baseline: orgResolved, mode: 'bulk', sources: null }) %>
+      </div>
+      <footer>
+        <button type="submit" name="action" value="clear_overrides" class="secondary" data-confirm="Clear every per-mailbox setting on {n} mailbox(es)? The workspace defaults apply afterwards.">Clear all overrides</button>
+        <button type="button" class="secondary" data-close>Cancel</button>
+        <button type="submit" name="action" value="settings">Apply to selected</button>
+      </footer>
+    </div>
+  </dialog>
+
+  <dialog class="modal" id="dlg-tags">
+    <div class="dlg">
+      <header><div><h2>Tags</h2><div class="who" data-who></div></div><button type="button" class="x" data-close aria-label="Close">×</button></header>
+      <div class="body">
+        <p class="muted" style="margin:0 0 0.6rem">Tags bundle mailboxes per campaign, client or batch. Filter by a tag in the table, then act on the bundle. Tick a tag to remove it from the selected mailboxes.</p>
+        <div class="chips" id="sel-tags"></div>
+        <div class="field" style="margin-top:0.9rem">
+          <label for="tags_add">Add tags, comma separated</label>
+          <input id="tags_add" name="tags_add" list="taglist" placeholder="campaign-a, q4" autocomplete="off">
+          <datalist id="taglist"><% for (const tg of tags) { %><option value="<%= tg.tag %>"><% } %></datalist>
+        </div>
+      </div>
+      <footer><button type="button" class="secondary" data-close>Cancel</button><button type="submit" name="action" value="tags">Save tags</button></footer>
+    </div>
+  </dialog>
+
+  <dialog class="modal" id="dlg-names">
+    <div class="dlg">
+      <header><div><h2>Names</h2><div class="who" data-who></div></div><button type="button" class="x" data-close aria-label="Close">×</button></header>
+      <div class="body">
+        <div id="sel-names"></div>
+        <p class="muted" style="margin:0 0 0.6rem">Sequencers import the owner's name next to the credentials; Instantly refuses a row without both a first and a last name.</p>
+        <div class="row" style="align-items:flex-end">
+          <div class="field" style="margin:0"><label for="names_first">First name</label><input id="names_first" name="names_first" autocomplete="off" style="width:180px"></div>
+          <div class="field" style="margin:0"><label for="names_last">Last name</label><input id="names_last" name="names_last" autocomplete="off" style="width:180px"></div>
+          <button type="submit" name="action" value="names" class="secondary">Set on all selected</button>
+        </div>
+        <p class="mini" style="margin:0.5rem 0 0">One person across several domains: search their address, select all shown, set the name once. A blank field is left as it is.</p>
+      </div>
+      <footer>
+        <span class="left">Or read the send-as name from Gmail / the directory entry from Microsoft 365.</span>
+        <button type="button" class="secondary" data-close>Close</button>
+        <button type="submit" name="action" value="refresh_profile">Fetch from provider</button>
+      </footer>
+    </div>
+  </dialog>
+
+  <dialog class="modal" id="dlg-export">
+    <div class="dlg">
+      <header><div><h2>Export to a sequencer</h2><div class="who" data-who></div></div><button type="button" class="x" data-close aria-label="Close">×</button></header>
+      <div class="body">
+        <div id="sel-export-names"></div>
+        <p class="muted" style="margin:0 0 0.8rem">A bulk-import CSV with each selected mailbox's proxy SMTP + IMAP credentials, name and address, laid out for the tool. Mailboxes without a credential get one generated.</p>
+        <div class="formats">
+          <% for (const [format, label] of Object.entries(sequencers)) { %>
+            <button type="submit" formaction="/ui/accounts.csv" name="format" value="<%= format %>" class="<%= format === 'generic' ? 'secondary' : '' %>">⬇ <%= label %></button>
+          <% } %>
+        </div>
+      </div>
+      <footer><span class="left">Missing names? Use <b>Names</b> on the same selection first.</span><button type="button" class="secondary" data-close>Close</button></footer>
+    </div>
+  </dialog>
 </form>
 
-<details class="section" id="defaults">
-  <summary>Workspace defaults <span class="muted">· pool scope, filter tag, visibility, and the defaults every mailbox inherits (<%= Object.keys(orgValues).length %> changed from the instance defaults)</span></summary>
-  <div class="card">
-    <form method="post" action="/ui/warmup/defaults">
-      <input type="hidden" name="_csrf" value="<%= csrf %>">
-      <input type="hidden" name="_settingsForm" value="1">
+<%# ---- workspace-level dialogs (own forms) ---- %>
+<dialog class="slide" id="dlg-workspace">
+  <form method="post" action="/ui/warmup/defaults" class="dlg">
+    <input type="hidden" name="_csrf" value="<%= csrf %>">
+    <input type="hidden" name="_settingsForm" value="1">
+    <header><div><h2>Workspace settings</h2><div class="who">Pool scope, filter tag, visibility, content, and the defaults every mailbox inherits (<%= Object.keys(orgValues).length %> changed from the instance defaults).</div></div><button type="button" class="x" data-close aria-label="Close">×</button></header>
+    <div class="body">
       <div class="row" style="gap:1.4rem; align-items:flex-start">
-        <div>
-          <label class="muted" style="display:block; font-size:0.78rem">Pool scope</label>
+        <div class="field">
+          <label>Pool scope</label>
           <select name="poolScope">
             <option value="instance" <%= overview.org.poolScope === 'instance' ? 'selected' : '' %>>Instance: pair with every mailbox on this proxy</option>
             <option value="org" <%= overview.org.poolScope === 'org' ? 'selected' : '' %>>This workspace only</option>
           </select>
         </div>
-        <div>
-          <label class="muted" style="display:block; font-size:0.78rem">Visible filter tag <span title="Off: warmup mail carries no marker at all; the proxy identifies it by its own registry. On: the tag is the last line of every message so tools reading the mailbox directly can filter it — but it is a fingerprint shared by every sender.">ⓘ</span></label>
-          <label style="font-size:0.85rem"><input type="checkbox" name="tagEnabled" value="1" <%= overview.org.tagEnabled ? 'checked' : '' %>> stamp tag into messages</label>
-          <input class="tagbox" name="filterTag" value="<%= overview.org.filterTag || '' %>" placeholder="generated when enabled" maxlength="16" style="width:12ch">
+        <div class="field">
+          <label>Visible filter tag <span title="Off: warmup mail carries no marker at all; the proxy identifies it by its own registry. On: the tag is the last line of every message so tools reading the mailbox directly can filter it — but it is a fingerprint shared by every sender.">ⓘ</span></label>
+          <div class="row"><label style="font-size:0.85rem"><input type="checkbox" name="tagEnabled" value="1" <%= overview.org.tagEnabled ? 'checked' : '' %>> stamp tag into messages</label>
+          <input class="tagbox" name="filterTag" value="<%= overview.org.filterTag || '' %>" placeholder="generated when enabled" maxlength="16" style="width:12ch"></div>
         </div>
-        <div>
-          <label class="muted" style="display:block; font-size:0.78rem">Visibility</label>
-          <label style="font-size:0.85rem"><input type="checkbox" name="emitWebhooks" value="1" <%= overview.org.emitWebhooks ? 'checked' : '' %>> deliver <code>warmup.*</code> webhook events</label><br>
+        <div class="field">
+          <label>Visibility</label>
+          <label style="font-size:0.85rem"><input type="checkbox" name="emitWebhooks" value="1" <%= overview.org.emitWebhooks ? 'checked' : '' %>> deliver <code>warmup.*</code> webhook events</label>
           <label style="font-size:0.85rem"><input type="checkbox" name="showInSendLog" value="1" <%= overview.org.showInSendLog ? 'checked' : '' %>> show warmup mail in the send log</label>
         </div>
-        <div>
-          <label class="muted" style="display:block; font-size:0.78rem">Daily cap</label>
+        <div class="field">
+          <label>Daily cap</label>
           <span style="font-size:0.9rem"><%= overview.org.dailyCap %> per mailbox<% if (overview.org.dailyCap < instanceCap) { %> <span class="muted">(plan limit)</span><% } %></span>
         </div>
       </div>
-      <div style="margin-top:0.9rem">
-        <%- include('_warmup-fields', { fields, values: orgValues, baseline: instanceDefaults, mode: 'defaults', sources: null }) %>
+      <div class="note <%= llm.configured ? (llm.breakerOpen ? 'bad' : 'ok') : '' %>" style="margin-top:0.4rem">
+        <% if (llm.configured) { %>
+          Content: written by <code><%= llmModel %></code> in batches and kept in a pool; the bundled templates cover gaps.
+          <% if (llm.breakerOpen) { %> The API is failing right now; templates are in use until <%= new Date(llm.openUntil).toLocaleString() %>.<% } %>
+          Calls today <%= llm.callsToday %>/<%= llm.budget %><% if (totalMix) { %> · openers this week <%= totalMix %> (<%= Math.round((mix.llm / totalMix) * 100) %>% generated)<% } %>.
+        <% } else { %>
+          Content: no API configured (<code>WARMUP_LLM_BASE_URL</code> / <code>WARMUP_LLM_API_KEY</code>); the bundled template corpus is used. Any OpenAI-compatible endpoint works.
+        <% } %>
       </div>
-      <div class="row" style="margin-top:0.8rem">
-        <button type="submit">Save workspace defaults</button>
-      </div>
-    </form>
-    <form method="post" action="/ui/warmup/defaults/reset" style="margin-top:0.5rem" onsubmit="return confirm('Reset every workspace default to the instance defaults?')">
-      <input type="hidden" name="_csrf" value="<%= csrf %>">
-      <button type="submit" class="secondary">Reset to instance defaults</button>
-    </form>
-  </div>
-</details>
+      <h3 style="font-size:0.95rem; margin:0.6rem 0 0.4rem">Defaults for every mailbox</h3>
+      <%- include('_warmup-fields', { fields, values: orgValues, baseline: instanceDefaults, mode: 'defaults', sources: null }) %>
+    </div>
+    <footer>
+      <button type="submit" formaction="/ui/warmup/defaults/reset" class="secondary" data-confirm="Reset every workspace default to the instance defaults?">Reset to instance defaults</button>
+      <button type="button" class="secondary" data-close>Cancel</button>
+      <button type="submit">Save workspace settings</button>
+    </footer>
+  </form>
+</dialog>
 
-<details class="section" id="content">
-  <% const mix = overview.content.mix; const totalMix = mix.llm + mix.template; %>
-  <summary>Content <span class="muted">· <%= llm.configured ? (llm.breakerOpen ? 'model unreachable, templates in use' : 'written by ' + llmModel) : 'bundled templates only' %><%= totalMix ? ` · ${totalMix} openers this week` : '' %></span></summary>
-  <div class="card">
-    <p class="muted" style="margin-top:0">
-      <% if (llm.configured) { %>
-        Conversations are written by <code><%= llmModel %></code> in batches and kept in a pool; the bundled templates cover gaps.
-        <% if (llm.breakerOpen) { %><span style="color:var(--err)">The API is failing right now; templates are in use until <%= new Date(llm.openUntil).toLocaleString() %>.</span><% } %>
-        Calls today: <%= llm.callsToday %>/<%= llm.budget %>.
-      <% } else { %>
-        No content API configured (<code>WARMUP_LLM_BASE_URL</code> / <code>WARMUP_LLM_API_KEY</code>); the bundled template corpus is used. Any OpenAI-compatible endpoint works.
+<% if (connectLinks.hub) { %>
+<dialog class="modal wide" id="dlg-onboard">
+  <div class="dlg">
+    <header><div><h2>Onboarding link</h2><div class="who">Hand this one URL to whoever adds mailboxes (a person, a VA, or an automation). It never expires and is not used up: opening it again adds the next mailbox. No admin login needed.</div></div><button type="button" class="x" data-close aria-label="Close">×</button></header>
+    <div class="body">
+      <div class="row">
+        <input class="mono" readonly value="<%= connectLinks.hub %>" onclick="this.select()" style="flex:1">
+        <a class="btn secondary" style="color:inherit" href="<%= connectLinks.hub %>" target="_blank" rel="noopener">Open</a>
+      </div>
+      <details style="margin-top:0.8rem">
+        <summary class="muted" style="cursor:pointer">Provider-specific links (skip the chooser page)</summary>
+        <% if (connectLinks.google) { %><div class="row" style="margin:0.5rem 0 0.4rem"><span style="min-width:75px">Gmail</span><input class="mono" readonly value="<%= connectLinks.google %>" onclick="this.select()" style="flex:1"></div><% } %>
+        <% if (connectLinks.microsoft) { %><div class="row"><span style="min-width:75px">Microsoft</span><input class="mono" readonly value="<%= connectLinks.microsoft %>" onclick="this.select()" style="flex:1"></div><% } %>
+        <p class="muted" style="margin:0.5rem 0 0">Also reusable, but they expire (default 7 days, <code>CONNECT_LINK_TTL_HOURS</code>) and go straight to one provider.</p>
+      </details>
+      <% if (overview.accounts.length > 0) { %>
+      <h3 style="font-size:0.95rem; margin:1.1rem 0 0.3rem">Export every mailbox</h3>
+      <p class="muted" style="margin:0 0 0.5rem">The whole workspace as a bulk-import CSV. To export some mailboxes, select them in the table and use Export.</p>
+      <% if (missingNames.length) { %><div class="note bad"><%= missingNames.length %> mailbox<%= missingNames.length === 1 ? ' has' : 'es have' %> no full name on file, and Instantly rejects rows without a first and last name. Select them and use <b>Names</b>.</div><% } %>
+      <div class="formats"><% for (const [format, label] of Object.entries(sequencers)) { %><a class="btn <%= format === 'generic' ? 'secondary' : '' %>" style="<%= format === 'generic' ? 'color:inherit' : '' %>" href="/ui/accounts.csv?format=<%= format %>">⬇ <%= label %></a><% } %></div>
       <% } %>
-    </p>
-    <p style="margin:0">
-      Openers this week: <strong><%= totalMix %></strong>
-      <% if (totalMix) { %><span class="muted">· <%= Math.round((mix.llm / totalMix) * 100) %>% generated, <%= Math.round((mix.template / totalMix) * 100) %>% templates</span><% } %>
-    </p>
+    </div>
+    <footer>
+      <form method="post" action="/ui/connect-links/revoke" data-confirm="Revoke every connect link issued so far? Anyone still holding an old link will have to be given the new one." style="margin-right:auto">
+        <input type="hidden" name="_csrf" value="<%= csrf %>">
+        <button class="secondary" type="submit">Revoke &amp; regenerate</button>
+      </form>
+      <button type="button" class="secondary" data-close>Close</button>
+    </footer>
   </div>
-</details>
+</dialog>
+<% } %>
 
 <script type="application/json" id="seldata"><%- selectionData.replace(/</g, '\\u003c') %></script>
 <script>
 (function () {
   const table = document.getElementById('pool');
-  if (!table) return;
   const DATA = JSON.parse(document.getElementById('seldata').textContent);
   const byId = new Map(DATA.accounts.map((a) => [a.id, a]));
-  const rows = Array.from(table.querySelectorAll('tbody tr'));
+  const rows = table ? Array.from(table.querySelectorAll('tbody tr')) : [];
+  const STORE = 'oem.mailboxes.selection';
+
+  const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+  const pct = (v) => (v === null || v === undefined ? '—' : v.toFixed(0) + '%');
+  const rateClass = (v) => (v === null ? '' : v >= 90 ? 'good' : v >= 75 ? 'warn' : 'bad');
+  const stateLabel = (s) => ({ off: 'off', ramping: 'ramping', steady: 'steady', paused: 'paused', auto_paused: 'auto-paused', blocked_upstream: 'blocked' })[s] || s;
+  function visibleRows() { return rows.filter((r) => !r.classList.contains('hidden')); }
+  function selectedIds() { return rows.filter((r) => r.querySelector('.rowcheck').checked).map((r) => r.dataset.id); }
+
+  // ---- dialogs ------------------------------------------------------------
+  function openDialog(id) {
+    const d = document.getElementById(id);
+    if (!d) return;
+    if (d.closest('#bulk')) {
+      const ids = selectedIds();
+      if (ids.length === 0) { alert('Tick at least one mailbox first (or use "Select shown").'); return; }
+      renderInto(id, ids);
+    }
+    d.showModal();
+  }
+  document.querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => openDialog(b.dataset.open)));
+  document.querySelectorAll('dialog').forEach((d) => {
+    d.querySelectorAll('[data-close]').forEach((c) => c.addEventListener('click', () => d.close()));
+    d.addEventListener('click', (e) => { if (e.target === d) d.close(); });
+  });
+  document.querySelectorAll('[data-confirm]').forEach((el) => el.addEventListener(el.tagName === 'FORM' ? 'submit' : 'click', (e) => {
+    if (!confirm(el.dataset.confirm.replace('{n}', selectedIds().length))) { e.preventDefault(); e.stopImmediatePropagation(); }
+  }));
+  if (location.hash === '#defaults' || location.hash === '#workspace') { const d = document.getElementById('dlg-workspace'); if (d) d.showModal(); }
+  if (!table) return;
+
   const q = document.getElementById('q');
   const fState = document.getElementById('f-state');
   const fHealth = document.getElementById('f-health');
@@ -419,18 +496,7 @@
   const selCount = document.getElementById('sel-count');
   const visibleCount = document.getElementById('visible-count');
   const checkVisible = document.getElementById('check-visible');
-  const bulkbar = document.getElementById('bulkbar');
-  const panel = document.getElementById('selpanel');
-  const STORE = 'oem.mailboxes.selection';
-  let activePanel = null;
-
-  const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
-  const pct = (v) => (v === null || v === undefined ? '—' : v.toFixed(0) + '%');
-  const rateClass = (v) => (v === null ? '' : v >= 90 ? 'good' : v >= 75 ? 'warn' : 'bad');
-  const stateLabel = (s) => ({ off: 'off', ramping: 'ramping', steady: 'steady', paused: 'paused', auto_paused: 'auto-paused', blocked_upstream: 'blocked' })[s] || s;
-
-  function visibleRows() { return rows.filter((r) => !r.classList.contains('hidden')); }
-  function selectedIds() { return rows.filter((r) => r.querySelector('.rowcheck').checked).map((r) => r.dataset.id); }
+  const selbar = document.getElementById('selbar');
 
   function applyFilters() {
     const text = q.value.trim().toLowerCase();
@@ -460,28 +526,33 @@
     visibleCount.textContent = v === rows.length ? rows.length + ' mailboxes' : v + ' of ' + rows.length + ' shown';
     checkVisible.checked = v > 0 && visibleRows().every((r) => r.querySelector('.rowcheck').checked);
     rows.forEach((r) => r.classList.toggle('picked', r.querySelector('.rowcheck').checked));
-    bulkbar.classList.toggle('has', ids.length > 0);
+    selbar.classList.toggle('has', ids.length > 0);
+    document.getElementById('sel-actions').hidden = ids.length === 0;
+    document.getElementById('sel-hint').hidden = ids.length > 0;
+    document.getElementById('sel-clear').hidden = ids.length === 0;
     try { sessionStorage.setItem(STORE, JSON.stringify(ids)); } catch (e) {}
-    renderSelection(ids);
   }
 
-  // ---- selection panel -------------------------------------------------
-  function renderSelection(ids) {
-    if (ids.length === 0 || !activePanel) { panel.hidden = true; return; }
-    panel.hidden = false;
-    const list = ids.map((id) => byId.get(id)).filter(Boolean);
-    const shown = list.slice(0, 6).map((a) => esc(a.email)).join(', ');
-    document.getElementById('sel-who').innerHTML = '<b>' + list.length + ' selected</b> · ' + shown + (list.length > 6 ? ' and ' + (list.length - 6) + ' more' : '');
-    for (const name of ['details', 'tags', 'settings', 'export']) document.getElementById('panel-' + name).hidden = name !== activePanel;
-    if (activePanel === 'details') renderDetails(list);
-    if (activePanel === 'tags') renderTags(list);
-    if (activePanel === 'export') {
-      const missing = list.filter((a) => !a.firstName || !a.lastName);
-      const derived = list.filter((a) => a.firstName && a.lastName && a.namesSource === 'derived');
-      document.getElementById('sel-names').innerHTML =
-        (missing.length ? '<span style="color:var(--err)">' + missing.length + ' of the selected have no full name: ' + esc(missing.slice(0, 5).map((a) => a.email).join(', ')) + (missing.length > 5 ? ' and ' + (missing.length - 5) + ' more' : '') + '.</span> ' : 'Every selected mailbox has a first and last name. ') +
-        (derived.length ? '<span>' + derived.length + ' name' + (derived.length === 1 ? ' is' : 's are') + ' guessed from the address (e.g. ' + esc(derived[0].email) + ' → ' + esc(derived[0].firstName + ' ' + derived[0].lastName) + '); fetch the real ones below.</span>' : '');
-    }
+  // ---- what each dialog shows for the current selection -------------------
+  function renderInto(id, ids) {
+    const list = ids.map((x) => byId.get(x)).filter(Boolean);
+    const d = document.getElementById(id);
+    const who = d.querySelector('[data-who]');
+    if (who) who.innerHTML = '<b>' + list.length + ' mailbox' + (list.length === 1 ? '' : 'es') + '</b> · ' + list.slice(0, 5).map((a) => esc(a.email)).join(', ') + (list.length > 5 ? ' and ' + (list.length - 5) + ' more' : '');
+    if (id === 'dlg-details') renderDetails(list);
+    if (id === 'dlg-tags') renderTags(list);
+    if (id === 'dlg-names') document.getElementById('sel-names').innerHTML = namesNote(list);
+    if (id === 'dlg-export') document.getElementById('sel-export-names').innerHTML = namesNote(list);
+  }
+
+  function namesNote(list) {
+    const missing = list.filter((a) => !a.firstName || !a.lastName);
+    const derived = list.filter((a) => a.firstName && a.lastName && a.namesSource === 'derived');
+    let html = '';
+    if (missing.length) html += '<div class="note bad">' + missing.length + ' of the selected ' + (missing.length === 1 ? 'has' : 'have') + ' no full name: ' + esc(missing.slice(0, 5).map((a) => a.email).join(', ')) + (missing.length > 5 ? ' and ' + (missing.length - 5) + ' more' : '') + '.</div>';
+    else html += '<div class="note ok">Every selected mailbox has a first and last name.</div>';
+    if (derived.length) html += '<div class="note">' + derived.length + ' name' + (derived.length === 1 ? ' is' : 's are') + ' guessed from the address (e.g. ' + esc(derived[0].email) + ' → ' + esc(derived[0].firstName + ' ' + derived[0].lastName) + ').</div>';
+    return html;
   }
 
   function renderDetails(list) {
@@ -591,11 +662,14 @@
   document.addEventListener('click', (e) => {
     const tag = e.target.closest('.tag');
     if (!tag) return;
+    document.querySelectorAll('dialog[open]').forEach((d) => d.close());
     fTag.value = tag.dataset.tag;
     if (fTag.value !== tag.dataset.tag) fTag.value = '';
     applyFilters();
     table.scrollIntoView({ block: 'start', behavior: 'smooth' });
   });
+  const warmMenu = document.getElementById('warm-menu');
+  document.addEventListener('click', (e) => { if (warmMenu && warmMenu.open && !warmMenu.contains(e.target)) warmMenu.open = false; });
   document.querySelectorAll('[data-sel]').forEach((b) => b.addEventListener('click', () => {
     const mode = b.dataset.sel;
     for (const r of visibleRows()) {
@@ -604,16 +678,18 @@
     }
     updateCounts();
   }));
+  document.getElementById('sel-clear').addEventListener('click', () => { rows.forEach((r) => { r.querySelector('.rowcheck').checked = false; }); updateCounts(); });
   checkVisible.addEventListener('change', () => { for (const r of visibleRows()) r.querySelector('.rowcheck').checked = checkVisible.checked; updateCounts(); });
-  rows.forEach((r) => r.querySelector('.rowcheck').addEventListener('change', updateCounts));
-  document.querySelectorAll('[data-panel]').forEach((b) => b.addEventListener('click', () => {
-    const name = b.dataset.panel;
-    if (selectedIds().length === 0) { alert('Select at least one mailbox first (tick rows, or use "Select shown").'); return; }
-    activePanel = activePanel === name ? null : name;
-    document.querySelectorAll('[data-panel]').forEach((o) => o.classList.toggle('on', o.dataset.panel === activePanel));
-    renderSelection(selectedIds());
-    if (activePanel) panel.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-  }));
+  rows.forEach((r) => {
+    r.querySelector('.rowcheck').addEventListener('change', updateCounts);
+    // A click anywhere in the row that is not a link, a tag or the box itself toggles it.
+    r.addEventListener('click', (e) => {
+      if (e.target.closest('a, .tag, input')) return;
+      const c = r.querySelector('.rowcheck');
+      c.checked = !c.checked;
+      updateCounts();
+    });
+  });
 
   // Column sort on the data-s-* attributes (numeric where they look numeric).
   table.querySelectorAll('th.sortable').forEach((th) => th.addEventListener('click', () => {
@@ -635,24 +711,17 @@
   document.getElementById('bulk').addEventListener('submit', (e) => {
     const submitter = e.submitter;
     if (!submitter || (submitter.name !== 'action' && submitter.name !== 'format')) return;
-    const n = selectedIds().length;
-    if (n === 0) { e.preventDefault(); alert('Select at least one mailbox first (tick rows, or use "Select shown").'); return; }
-    if (submitter.value === 'disable' && !confirm('Disable warmup for ' + n + ' mailbox(es)? Pending conversations are dropped; history is kept.')) e.preventDefault();
-    if (submitter.value === 'clear_overrides' && !confirm('Clear every per-mailbox setting on ' + n + ' mailbox(es)? The workspace defaults apply afterwards.')) e.preventDefault();
+    if (selectedIds().length === 0) { e.preventDefault(); alert('Tick at least one mailbox first (or use "Select shown").'); }
   });
 
-  // Keep the selection across the reload that follows a bulk action.
+  // Keep the selection across the reload that follows an action.
   try {
     const saved = JSON.parse(sessionStorage.getItem(STORE) || '[]');
     if (Array.isArray(saved) && saved.length) {
       const set = new Set(saved);
-      let any = false;
-      for (const r of rows) { const c = r.querySelector('.rowcheck'); c.checked = set.has(r.dataset.id); any = any || c.checked; }
-      if (any) activePanel = 'details';
-      document.querySelectorAll('[data-panel]').forEach((o) => o.classList.toggle('on', o.dataset.panel === activePanel));
+      for (const r of rows) r.querySelector('.rowcheck').checked = set.has(r.dataset.id);
     }
   } catch (e) {}
-  if (location.hash === '#defaults') document.getElementById('defaults').open = true;
   updateCounts();
 })();
 </script>
