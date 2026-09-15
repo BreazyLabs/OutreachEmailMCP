@@ -24,6 +24,8 @@ export interface PremiumInboxesConfig {
   pricePerInboxCents?: number;
   defaults: {
     emailProvider: 'Google' | 'Microsoft';
+    /** Where the cold-email domains redirect to (the real website); required by the provisioner. */
+    forwardedDomain?: string;
     inboxesPerDomain: number;
     prefixVariants: string[];
     profilePictureLink?: string;

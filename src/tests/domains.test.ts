@@ -100,6 +100,7 @@ describe('Premium Inboxes client and order flow', () => {
     const { buildPurchase } = await import('../domains/service.js');
     const body = buildPurchase(orgId, {
       domains: ['getbreazy.nl', 'trybreazy.nl'],
+      forwardedDomain: 'breazy.nl',
       emailProvider: 'google',
       inboxesPerDomain: 2,
       prefixVariants: ['first', 'first.last'],
@@ -108,6 +109,7 @@ describe('Premium Inboxes client and order flow', () => {
       insured: true,
     }, { platform: 'Namecheap', username: 'nc-user', password: 'nc-pass' }, {});
     expect(body.emailProvider).toBe('Google');
+    expect(body.forwardedDomain).toBe('breazy.nl');
     expect(body.domains).toBe('getbreazy.nl\ntrybreazy.nl');
     expect(body.numberOfInboxes).toBe(4);
     expect(body.prefixVariants).toEqual(['dennis', 'dennis.jansen']);
@@ -146,7 +148,7 @@ describe('Premium Inboxes client and order flow', () => {
     const now = Date.now();
     db.insert(schema.domains).values({ id: 'd1', orgId, domain: 'getbreazy.nl', registrar: 'namecheap', status: 'purchased', createdAt: now, updatedAt: now }).run();
     const order = await service.placeOrder(orgId, {
-      domains: ['getbreazy.nl'], emailProvider: 'google', inboxesPerDomain: 2, prefixVariants: ['first', 'first.last'],
+      domains: ['getbreazy.nl'], forwardedDomain: 'breazy.nl', emailProvider: 'google', inboxesPerDomain: 2, prefixVariants: ['first', 'first.last'],
       personas: [{ domain: 'getbreazy.nl', firstName: 'Dennis', lastName: 'Jansen' }], tags: ['batch-1'],
     });
     expect(order.externalId).toBe('ord_1');
@@ -255,7 +257,7 @@ describe('address patterns and one-click batches', () => {
     expect(est).toMatchObject({ domainTotal: 14.96, inboxes: 6, pricePerInboxCents: 350, inboxTotalCents: 2100 });
 
     const r = await service.runBatch(orgId, {
-      domains: ['owned.nl', 'new.nl', 'bad.nl'], emailProvider: 'google', inboxesPerDomain: 2, prefixVariants: ['first', 'first.last'],
+      domains: ['owned.nl', 'new.nl', 'bad.nl'], forwardedDomain: 'main.nl', emailProvider: 'google', inboxesPerDomain: 2, prefixVariants: ['first', 'first.last'],
       personas: ['owned.nl', 'new.nl', 'bad.nl'].map((domain) => ({ domain, firstName: 'Dave', lastName: 'Spies' })), tags: ['b1'], profilePictureLink: 'https://x.test/p.png',
     });
     expect(r.bought.map((b) => [b.domain, b.ok])).toEqual([['new.nl', true], ['bad.nl', false]]);
@@ -310,7 +312,7 @@ describe('Namecheap balance guard', () => {
     expect(await service.clients.namecheap(orgId).balances()).toEqual({ available: 10, total: 10, currency: 'USD' });
     const est = await service.estimateBatch(orgId, ['a.nl', 'b.nl'], 1);
     expect(est.balance).toEqual({ available: 10, currency: 'USD' });
-    const r = await service.runBatch(orgId, { domains: ['a.nl', 'b.nl'], emailProvider: 'google', inboxesPerDomain: 1, prefixVariants: ['first'], personas: [{ domain: 'a.nl', firstName: 'A', lastName: 'B' }] });
+    const r = await service.runBatch(orgId, { domains: ['a.nl', 'b.nl'], forwardedDomain: 'x.nl', emailProvider: 'google', inboxesPerDomain: 1, prefixVariants: ['first'], personas: [{ domain: 'a.nl', firstName: 'A', lastName: 'B' }] });
     expect(r.bought).toEqual([]);
     expect(r.orderError).toMatch(/balance is 10.00 USD, the 2 registrations need 14.96/);
     expect(creates).toBe(0);

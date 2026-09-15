@@ -85,6 +85,7 @@ function wizardInput(body: Body | undefined, pi: PremiumInboxesConfig | null) {
     tlds: list(b.tlds).length ? list(b.tlds).map((t) => t.toLowerCase()) : DEFAULT_TLDS.slice(0, 3),
     custom: str(b.custom),
     picked: list(b.domains),
+    forwardedDomain: str(b.forwardedDomain) || d?.forwardedDomain || '',
     emailProvider: str(b.emailProvider) || (d?.emailProvider === 'Microsoft' ? 'microsoft' : 'google'),
     inboxesPerDomain: Number(b.inboxesPerDomain) || d?.inboxesPerDomain || 2,
     firstName: str(b.firstName),
@@ -187,6 +188,7 @@ export function registerDomainsUiRoutes(app: FastifyInstance): void {
     try {
       const order = await placeOrder(session.org.id, {
         domains,
+        forwardedDomain: str(body.forwardedDomain),
         emailProvider: str(body.emailProvider) === 'microsoft' ? 'microsoft' : 'google',
         inboxesPerDomain: Math.max(1, Math.min(10, Number(body.inboxesPerDomain) || 1)),
         prefixVariants: splitTagInput(str(body.prefixVariants)),
@@ -211,6 +213,7 @@ export function registerDomainsUiRoutes(app: FastifyInstance): void {
     const domains = parseDomainList(w.picked.join('\n'));
     if (domains.length === 0) return wizardAgain(req, reply, session, 'Tick at least one domain.');
     if (!w.firstName || !w.lastName) return wizardAgain(req, reply, session, 'The mailboxes need a first and last name.');
+    if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(w.forwardedDomain.replace(/^https?:\/\//, '').replace(/\/.*$/, ''))) return wizardAgain(req, reply, session, 'Premium Inboxes needs a forwarding domain: the website the new domains redirect to, e.g. kandidaatflow.nl.');
     if (localParts(w.patterns, w.firstName, w.lastName).length === 0) return wizardAgain(req, reply, session, 'Pick at least one address pattern.');
     let profilePictureLink = w.pictureUrl || undefined;
     const pictureData = str(body.pictureData);
@@ -223,6 +226,7 @@ export function registerDomainsUiRoutes(app: FastifyInstance): void {
     }
     const result = await runBatch(session.org.id, {
       domains,
+      forwardedDomain: w.forwardedDomain.replace(/^https?:\/\//, '').replace(/\/.*$/, '').toLowerCase(),
       emailProvider: w.emailProvider === 'microsoft' ? 'microsoft' : 'google',
       inboxesPerDomain: Math.max(1, Math.min(10, w.inboxesPerDomain)),
       prefixVariants: w.patterns,
@@ -240,6 +244,8 @@ export function registerDomainsUiRoutes(app: FastifyInstance): void {
     if (result.order) parts.push(`order ${result.order.externalId} placed for ${domains.length - failedBuys.length} domain${domains.length - failedBuys.length === 1 ? '' : 's'}; progress is checked every 10 minutes`);
     if (result.orderError) parts.push(`the order failed: ${result.orderError}`);
     if (!result.order) return wizardAgain(req, reply, session, parts.join('. ') + '.');
+    const piCfg = getIntegration(session.org.id, 'premiuminboxes');
+    if (piCfg && piCfg.defaults.forwardedDomain !== w.forwardedDomain) setIntegration(session.org.id, 'premiuminboxes', { ...piCfg, defaults: { ...piCfg.defaults, forwardedDomain: w.forwardedDomain } });
     return reply.redirect(back('notice', parts.join('. ') + '.'));
   });
 
@@ -361,6 +367,7 @@ export function registerDomainsUiRoutes(app: FastifyInstance): void {
       },
       defaults: {
         emailProvider: str(body.d_emailProvider) === 'Microsoft' ? 'Microsoft' : 'Google',
+        forwardedDomain: str(body.d_forwardedDomain) || current?.defaults.forwardedDomain || undefined,
         inboxesPerDomain: Math.max(1, Math.min(10, Number(body.d_inboxesPerDomain) || 2)),
         prefixVariants: splitTagInput(str(body.d_prefixVariants)) .length ? splitTagInput(str(body.d_prefixVariants)) : ['first', 'first.last'],
         profilePictureLink: str(body.d_profilePictureLink) || undefined,

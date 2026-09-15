@@ -214,6 +214,8 @@ export function listDomains(orgId: string): Domain[] {
 
 export interface OrderInput {
   domains: string[];
+  /** The website the new domains redirect to; the provisioner requires it. */
+  forwardedDomain: string;
   emailProvider: 'google' | 'microsoft';
   inboxesPerDomain: number;
   prefixVariants: string[];
@@ -255,6 +257,7 @@ export function buildPurchase(orgId: string, input: OrderInput, hosting: PiPurch
     emailProvider: input.emailProvider === 'google' ? 'Google' : 'Microsoft',
     hosting,
     domains: input.domains.join('\n'),
+    forwardedDomain: input.forwardedDomain,
     numberOfInboxes: input.domains.length * input.inboxesPerDomain,
     inboxesPerDomain: input.inboxesPerDomain,
     prefixVariants: partsFor(first),

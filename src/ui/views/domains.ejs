@@ -225,6 +225,7 @@
       <h3><span class="n">2</span> Mailboxes</h3>
       <div class="grid3">
         <div class="field"><label>Provider</label><select name="emailProvider"><option value="google" <%= w.emailProvider === 'google' ? 'selected' : '' %>>Google Workspace</option><option value="microsoft" <%= w.emailProvider === 'microsoft' ? 'selected' : '' %>>Microsoft 365</option></select></div>
+        <div class="field"><label>Forwarding domain, where the new domains redirect to</label><input name="forwardedDomain" value="<%= w.forwardedDomain %>" placeholder="kandidaatflow.nl" required></div>
         <div class="field"><label>Inboxes per domain</label><input type="number" name="inboxesPerDomain" id="perDomain" min="1" max="10" value="<%= w.inboxesPerDomain %>"></div>
         <div class="field"><label>Mailbox password</label><input name="password" value="<%= w.password || suggestedPassword %>"></div>
         <div class="field"><label>First name</label><input name="firstName" id="firstName" value="<%= w.firstName %>" placeholder="Dave" autocomplete="off"></div>
@@ -361,6 +362,7 @@
         <div class="grid3">
           <div class="field"><label>Provider</label><select name="d_emailProvider"><option <%= pi.defaults.emailProvider === 'Google' ? 'selected' : '' %>>Google</option><option <%= pi.defaults.emailProvider === 'Microsoft' ? 'selected' : '' %>>Microsoft</option></select></div>
           <div class="field"><label>Inboxes per domain</label><input type="number" name="d_inboxesPerDomain" min="1" max="10" value="<%= pi.defaults.inboxesPerDomain %>"></div>
+          <div class="field"><label>Default forwarding domain</label><input name="d_forwardedDomain" value="<%= pi.defaults.forwardedDomain || '' %>" placeholder="your website"></div>
           <div class="field"><label>Address patterns</label><input name="d_prefixVariants" value="<%= (pi.defaults.prefixVariants || []).join(', ') %>"></div>
           <div class="field"><label>Profile picture URL</label><input name="d_profilePictureLink" value="<%= pi.defaults.profilePictureLink || '' %>"></div>
           <div class="field"><label>Master inbox (forwarding)</label><input name="d_masterInboxEmail" value="<%= pi.defaults.masterInboxEmail || '' %>"></div>
@@ -457,6 +459,7 @@
     const on = picks().filter((c) => c.checked);
     if (on.length === 0) { e.preventDefault(); alert('Tick at least one domain.'); return; }
     if (!first.value.trim() || !last.value.trim()) { e.preventDefault(); alert('Fill in the first and last name for the mailboxes.'); return; }
+    if (!form.querySelector('[name=forwardedDomain]').value.trim()) { e.preventDefault(); alert('Fill in the forwarding domain: the website the new domains redirect to.'); return; }
     if (!form.querySelector('[name=patterns]:checked')) { e.preventDefault(); alert('Tick at least one address pattern.'); return; }
     const buy = on.filter((c) => !c.dataset.owned).length;
     const per = Math.max(1, Number(document.getElementById('perDomain').value || 1));
@@ -464,7 +467,7 @@
   });
   // ---- draft: autosaved in the browser, exportable as JSON -----------------
   const DRAFT = 'oem.batch.draft';
-  const FIELDS = ['brand', 'custom', 'emailProvider', 'inboxesPerDomain', 'password', 'firstName', 'lastName', 'tags', 'pictureUrl', 'additionalInfo'];
+  const FIELDS = ['brand', 'custom', 'emailProvider', 'forwardedDomain', 'inboxesPerDomain', 'password', 'firstName', 'lastName', 'tags', 'pictureUrl', 'additionalInfo'];
   function state() {
     const s = { version: 1 };
     for (const k of FIELDS) { const el = form.querySelector('[name=' + k + ']'); if (el) s[k] = el.value; }

@@ -122,8 +122,10 @@ export class PremiumInboxesClient {
     if (!res.ok) {
       let msg = text.slice(0, 300);
       try {
-        const j = JSON.parse(text) as { message?: string; name?: string };
+        const j = JSON.parse(text) as { message?: string; name?: string; errors?: { property?: string; constraints?: Record<string, string> }[] };
         msg = j.message ?? j.name ?? msg;
+        const details = (j.errors ?? []).flatMap((e) => Object.values(e.constraints ?? {}).map((c) => c || e.property || '')).filter(Boolean);
+        if (details.length) msg = `${msg} ${details.join('; ')}`;
       } catch {
         // plain text error
       }
