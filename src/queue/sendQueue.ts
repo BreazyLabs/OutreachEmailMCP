@@ -2,11 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { nanoid } from 'nanoid';
-import { eq } from 'drizzle-orm';
+import { and, desc, eq, gt } from 'drizzle-orm';
 import { db, sqlite, schema } from '../db/index.js';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { extractHeader, ensureEnvelopeRecipients } from '../utils/mime-headers.js';
+import { normalizeMessageId } from '../inbound/classify.js';
 import { assertCanSend } from '../tenancy/orgs.js';
 import type { SendJob } from '../db/schema.js';
 
@@ -117,6 +118,28 @@ function rowToJob(r: Record<string, unknown>): SendJob {
     repliedAt: r.replied_at,
     replyMessageId: r.reply_message_id,
   } as SendJob;
+}
+
+/**
+ * A prior send job for this mailbox carrying the same Message-ID, within the
+ * window — the basis for idempotent submission. Matching is on the normalised
+ * id (brackets and case ignored), the same key reply/bounce correlation uses.
+ * Any status counts: a retried submission must not send again even while the
+ * first attempt is still queued.
+ */
+export function findRecentJobByMessageId(
+  accountId: string,
+  messageId: string,
+  withinMs = 7 * 24 * 3600_000,
+): SendJob | null {
+  const norm = normalizeMessageId(messageId);
+  if (!norm) return null;
+  // Raw rows (snake_case) so rowToJob maps them the same way claimJobs does.
+  const rows = sqlite
+    .prepare('SELECT * FROM send_jobs WHERE account_id = ? AND created_at > ? ORDER BY created_at DESC')
+    .all(accountId, Date.now() - withinMs) as Record<string, unknown>[];
+  const hit = rows.find((r) => normalizeMessageId(r.message_id as string | null) === norm);
+  return hit ? rowToJob(hit) : null;
 }
 
 export function markSent(jobId: string, providerMessageId: string | null): void {

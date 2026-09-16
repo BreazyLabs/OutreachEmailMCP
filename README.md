@@ -398,6 +398,8 @@ Enable it per mailbox on the account page or in bulk on the **Mailboxes** page: 
 
 Warmup mail carries **no marker of its own**: the engine recognises it by the `Message-ID` it generated (in the provider's own house style), with a fallback match on sender, recipient and subject for providers that rewrite ids, so a receiver has nothing to pattern-match across senders. A workspace can optionally switch on a visible **filter tag** (an Instantly-style code as the last line of the body) for tools that read the mailboxes without going through the proxy. Pass `?includeWarmup=true` to the message listing or send-log endpoints to see warmup mail deliberately.
 
+Passing a `messageId` also makes the send **idempotent**: if a job for the same mailbox already carries that Message-ID (any status, within 7 days), the endpoint returns `202` with the existing `jobId` and `deduped: true` instead of sending again. A retry after a client timeout or a crash between the enqueue and the `202` therefore cannot send the same email twice.
+
 Every sending domain's **SPF, DKIM, DMARC and MX** are checked every six hours (`GET /api/v1/warmup/dns`, a re-check button on the Mailboxes page); a domain that fails authentication is flagged in the table, lowers the mailbox health score, and is reported in the daily health mail, because warmup cannot fix a domain that does not authenticate.
 
 ```bash

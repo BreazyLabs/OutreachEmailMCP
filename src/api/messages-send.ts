@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import MailComposer from 'nodemailer/lib/mail-composer/index.js';
 import type Mail from 'nodemailer/lib/mailer/index.js';
-import { enqueueSend } from '../queue/sendQueue.js';
+import { enqueueSend, findRecentJobByMessageId } from '../queue/sendQueue.js';
 import { providerFor } from '../providers/index.js';
 import { logActivity } from '../observability/activity.js';
 import { loadAccount, requireScope } from './plugin.js';
@@ -110,6 +110,23 @@ export function registerSendRoutes(app: FastifyInstance) {
         return reply.code(413).send({
           error: `Message is ${raw.length} bytes; the ${account.provider} delivery limit is ${providerLimit} bytes`,
         });
+      }
+
+      // Idempotency: when the caller stamps its own Message-ID, a resubmission
+      // of the same id (a retry after a client timeout or a crash between our
+      // DB write and the 202) returns the first job instead of sending again.
+      const writtenId = messageIdOf(raw);
+      if (body.messageId && writtenId) {
+        const existing = findRecentJobByMessageId(account.id, writtenId);
+        if (existing) {
+          return reply.code(202).send({
+            jobId: existing.id,
+            status: existing.status,
+            messageId: existing.messageId,
+            deduped: true,
+            statusUrl: `/api/v1/accounts/${account.id}/send-jobs/${existing.id}`,
+          });
+        }
       }
 
       const job = enqueueSend({
