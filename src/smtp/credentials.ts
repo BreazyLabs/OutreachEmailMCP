@@ -32,6 +32,19 @@ export function smtpAdvertisedHost(): string {
   return config.SMTP_BIND === '0.0.0.0' ? new URL(config.BASE_URL).hostname : config.SMTP_BIND;
 }
 
+/**
+ * The ports clients are told to use, with implicit TLS preferred: sequencers
+ * overwhelmingly assume SSL-on-connect. An explicit SMTP_/IMAP_ADVERTISED_PORT
+ * wins (TLS terminated by a proxy in front), then the app's own TLS ports,
+ * then the STARTTLS ports.
+ */
+export function advertisedPorts(): { smtp: number; imap: number; implicitTls: boolean } {
+  const smtp = config.SMTP_ADVERTISED_PORT ?? (config.SMTPS_PORT > 0 ? config.SMTPS_PORT : config.SMTP_PORT);
+  const imap = config.IMAP_ADVERTISED_PORT ?? (config.IMAPS_PORT > 0 ? config.IMAPS_PORT : config.IMAP_PORT);
+  const implicitTls = smtp !== config.SMTP_PORT && imap !== config.IMAP_PORT;
+  return { smtp, imap, implicitTls };
+}
+
 // Shared by the SMTP and IMAP listeners: one proxy credential works for both.
 // Returns the owning account on success, marks the credential used.
 export function verifyProxyCredential(username: string, password: string): Account | null {

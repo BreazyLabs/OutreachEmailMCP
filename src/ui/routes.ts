@@ -8,7 +8,7 @@ import { decryptSecret, encryptSecret } from '../crypto/secrets.js';
 import { isPrivateWebhookTarget } from '../inbound/webhooks.js';
 import { deleteAccountSpoolFiles } from '../queue/sendQueue.js';
 import { purgeAccountTasks } from '../warmup/tasks.js';
-import { createSmtpCredential, smtpAdvertisedHost } from '../smtp/credentials.js';
+import { createSmtpCredential, smtpAdvertisedHost, advertisedPorts } from '../smtp/credentials.js';
 import { buildAccountsCsv } from '../export/accounts-csv.js';
 import {
   createConnectHubLink,
@@ -245,8 +245,9 @@ export function registerUiRoutes(app: FastifyInstance) {
       sync: sync ?? null,
       newCredential: null,
       smtpHost: smtpAdvertisedHost(),
-      smtpPort: config.SMTP_PORT,
-      imapPort: config.IMAP_PORT,
+      smtpPort: advertisedPorts().smtp,
+      imapPort: advertisedPorts().imap,
+      implicitTls: advertisedPorts().implicitTls,
     });
   });
 
@@ -274,8 +275,9 @@ export function registerUiRoutes(app: FastifyInstance) {
         username,
         password,
         smtpHost: smtpAdvertisedHost(),
-        smtpPort: config.SMTP_PORT,
-        imapPort: config.IMAP_PORT,
+        smtpPort: advertisedPorts().smtp,
+        imapPort: advertisedPorts().imap,
+        implicitTls: advertisedPorts().implicitTls,
       });
     },
   );

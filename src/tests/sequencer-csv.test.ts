@@ -137,3 +137,24 @@ describe('names borrowed from siblings and set in bulk', () => {
     expect(accountsMissingNames(orgId).map((a) => a.email)).not.toContain('thom.v@slim.test');
   });
 });
+
+describe('advertised ports', () => {
+  it('prefers explicit advertised ports over the listener ports', async () => {
+    const { config } = await import('../config.js');
+    const { advertisedPorts } = await import('../smtp/credentials.js');
+    const mutable = config as unknown as Record<string, unknown>;
+    const saved = { s: mutable.SMTP_ADVERTISED_PORT, i: mutable.IMAP_ADVERTISED_PORT, ss: mutable.SMTPS_PORT, is: mutable.IMAPS_PORT };
+    try {
+      mutable.SMTPS_PORT = 0; mutable.IMAPS_PORT = 0; mutable.SMTP_ADVERTISED_PORT = undefined; mutable.IMAP_ADVERTISED_PORT = undefined;
+      expect(advertisedPorts()).toEqual({ smtp: config.SMTP_PORT, imap: config.IMAP_PORT, implicitTls: false });
+      mutable.SMTP_ADVERTISED_PORT = 465; mutable.IMAP_ADVERTISED_PORT = 993;
+      expect(advertisedPorts()).toEqual({ smtp: 465, imap: 993, implicitTls: true });
+      const { buildAccountsCsv } = await import('../export/accounts-csv.js');
+      const row = buildAccountsCsv(orgId, 'instantly').trim().split('\r\n')[1]!.split(',');
+      expect(row[6]).toBe('993');
+      expect(row[10]).toBe('465');
+    } finally {
+      Object.assign(mutable, { SMTP_ADVERTISED_PORT: saved.s, IMAP_ADVERTISED_PORT: saved.i, SMTPS_PORT: saved.ss, IMAPS_PORT: saved.is });
+    }
+  });
+});

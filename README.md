@@ -316,6 +316,10 @@ of `message`, so one endpoint can drive a delivery dashboard without polling.
 
 Verify the signature, then fetch the full body via the read API using `message.id`. Non-2xx responses are retried up to 6 times with exponential backoff; see delivery history in the UI or `GET /api/v1/webhooks/:id/deliveries`. New mail is detected by polling (default every 60s, `POLL_INTERVAL`); no public inbound URL is required. Webhook targets that resolve to private/loopback addresses are rejected unless `WEBHOOKS_ALLOW_PRIVATE=true`.
 
+### Ports clients are told to use
+
+Exports, the account page and the credential page advertise the implicit-TLS ports (465/993) whenever the app serves them, because every sequencer assumes SSL-on-connect. When TLS is terminated in front of the app (a proxy owns 465/993 and forwards to the STARTTLS ports, so `SMTPS_PORT=0`/`IMAPS_PORT=0`), set `SMTP_ADVERTISED_PORT=465` and `IMAP_ADVERTISED_PORT=993`; without them the STARTTLS ports are advertised and a sequencer configured with SSL fails with "wrong version number".
+
 ## Domains and mailbox provisioning
 
 The **Domains** page takes a batch from a brand word to connected mailboxes. Connect two integrations per workspace (credentials are stored encrypted with `MASTER_KEY`):

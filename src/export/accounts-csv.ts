@@ -1,7 +1,7 @@
 import { desc, eq } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { decryptSecret } from '../crypto/secrets.js';
-import { createSmtpCredential, smtpAdvertisedHost } from '../smtp/credentials.js';
+import { createSmtpCredential, smtpAdvertisedHost, advertisedPorts } from '../smtp/credentials.js';
 import { config } from '../config.js';
 import { namesFor } from '../accounts/profile.js';
 import { parseTags } from '../accounts/tags.js';
@@ -37,6 +37,7 @@ function csvField(value: string | number | null): string {
 // export is complete and directly importable.
 export function collectExportRows(orgId: string, filter: ExportFilter = {}): AccountExportRow[] {
   const host = smtpAdvertisedHost();
+  const ports = advertisedPorts();
   const rows: AccountExportRow[] = [];
   const accounts = db
     .select()
@@ -69,12 +70,11 @@ export function collectExportRows(orgId: string, filter: ExportFilter = {}): Acc
       provider: account.provider,
       status: account.status,
       host,
-      // Advertise the implicit-TLS ports when they are enabled: sequencers
-      // overwhelmingly assume SSL-on-connect for mail ports, and pointing them
-      // at the STARTTLS listener fails deep inside their TLS stack with an
-      // error nobody can act on ("wrong version number").
-      smtpPort: config.SMTPS_PORT > 0 ? config.SMTPS_PORT : config.SMTP_PORT,
-      imapPort: config.IMAPS_PORT > 0 ? config.IMAPS_PORT : config.IMAP_PORT,
+      // Implicit-TLS ports whenever they exist (see advertisedPorts):
+      // sequencers assume SSL-on-connect, and a STARTTLS port fails deep
+      // inside their TLS stack with "wrong version number".
+      smtpPort: ports.smtp,
+      imapPort: ports.imap,
       username,
       password,
     });

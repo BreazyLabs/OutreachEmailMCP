@@ -38,7 +38,7 @@
 <h2>SMTP credentials</h2>
 <div class="card">
   <p class="muted">
-    SMTP: <code><%= smtpHost %>:<%= smtpPort %></code> (STARTTLS) · IMAP: <code><%= smtpHost %>:<%= imapPort %></code> (STARTTLS) — same credentials for both.
+    SMTP: <code><%= smtpHost %>:<%= smtpPort %></code> (<%= implicitTls ? 'SSL/TLS' : 'STARTTLS' %>) · IMAP: <code><%= smtpHost %>:<%= imapPort %></code> (<%= implicitTls ? 'SSL/TLS' : 'STARTTLS' %>) — same credentials for both.
     MAIL FROM must be <code><%= account.email %></code>.
   </p>
   <% const active = credentials.filter(c => !c.revokedAt); %>

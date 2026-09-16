@@ -43,6 +43,12 @@ const envSchema = z.object({
   IMAP_PORT: z.coerce.number().int().default(1143),
   // Implicit-TLS (IMAPS, 993-style) listener; 0 disables it.
   IMAPS_PORT: z.coerce.number().int().min(0).default(993),
+  // What clients are told to connect to. Set these when TLS is terminated in
+  // front of the app (a proxy owns 465/993 and forwards to the STARTTLS
+  // ports): sequencers assume SSL-on-connect and fail on a STARTTLS port
+  // with "wrong version number".
+  SMTP_ADVERTISED_PORT: z.coerce.number().int().min(1).max(65535).optional(),
+  IMAP_ADVERTISED_PORT: z.coerce.number().int().min(1).max(65535).optional(),
   IMAP_BIND: z.string().default('127.0.0.1'),
   IMAP_ALLOW_INSECURE_AUTH: boolFromEnv,
   // How many recent INBOX messages to index per account on first IMAP use
