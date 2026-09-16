@@ -271,6 +271,23 @@
   <% } %>
 </div>
 
+<% if (typeof superuser !== 'undefined' && superuser) { %>
+<h2>Move to another workspace <span class="badge active" title="Platform admins only">super</span></h2>
+<div class="card">
+  <p class="muted" style="margin-top:0">Moves this mailbox, with its tokens, credentials, warmup state and history, into another workspace. Webhooks pinned to it in the current workspace are removed. The target workspace's plan limit applies.</p>
+  <form method="post" action="/ui/accounts/<%= account.id %>/move" class="row" onsubmit="return confirm('Move <%= account.email %> to the selected workspace?')">
+    <input type="hidden" name="_csrf" value="<%= csrf %>">
+    <select name="orgId" required>
+      <option value="">Choose a workspace…</option>
+      <% (typeof orgs !== 'undefined' ? orgs : []).forEach(function (o) { if (o.id !== orgId) { %>
+      <option value="<%= o.id %>"><%= o.name %> (<%= o.accounts %> mailbox<%= o.accounts === 1 ? '' : 'es' %>)</option>
+      <% } }) %>
+    </select>
+    <button type="submit" class="secondary">Move mailbox</button>
+  </form>
+</div>
+<% } %>
+
 <h2>Danger zone</h2>
 <div class="card">
   <form method="post" action="/ui/accounts/<%= account.id %>/delete"

@@ -28,6 +28,9 @@ import { generateApiKey } from '../crypto/credentials.js';
 import { createOrgWithOwner, getOrg, planLimits } from '../tenancy/orgs.js';
 import { ALL_SCOPES } from './plugin.js';
 import { logger } from '../logger.js';
+import { QuotaError } from '../tenancy/orgs.js';
+import { adoptAccount, AdoptError, listAllAccounts } from '../accounts/adopt.js';
+import { publicAccount } from './accounts.js';
 
 /** Timing-safe compare so the admin key can't be probed byte by byte. */
 function adminKeyMatches(presented: string): boolean {
@@ -175,6 +178,30 @@ export function registerProvisioningRoutes(app: FastifyInstance) {
       .parse(req.body ?? {}).name;
     const { key, id } = mintKey(req.params.orgId, name ?? 'provisioned');
     return reply.code(201).send({ apiKeyId: id, apiKey: key, scopes: ALL_SCOPES });
+  });
+
+  // Every mailbox on the instance, with its workspace — for a product that
+  // needs to pick one to move (below).
+  app.get('/admin/accounts', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return;
+    return reply.send({ accounts: listAllAccounts() });
+  });
+
+  // Move an existing mailbox into a workspace. Its tokens, credentials and
+  // history follow the account id; only account-pinned webhooks of the old
+  // workspace are dropped, because after the move they would report on a
+  // mailbox their owner no longer holds.
+  app.post<{ Params: { orgId: string } }>('/admin/orgs/:orgId/accounts/adopt', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return;
+    const body = z.object({ accountId: z.string().min(1) }).parse(req.body ?? {});
+    try {
+      const { account, fromOrgId } = adoptAccount(req.params.orgId, body.accountId);
+      return reply.send({ account: publicAccount(account), fromOrgId });
+    } catch (err) {
+      if (err instanceof AdoptError) return reply.code(err.status).send({ error: err.message });
+      if (err instanceof QuotaError) return reply.code(429).send({ error: err.message });
+      throw err;
+    }
   });
 
   app.delete<{ Params: { orgId: string; keyId: string } }>(

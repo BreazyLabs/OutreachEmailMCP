@@ -522,8 +522,16 @@ export async function syncOrders(orgId: string): Promise<{ orders: number; deliv
 
 const registrarSyncedAt = new Map<string, number>();
 
+/** Workspaces whose orders must be mirrored: those with their own provisioner
+ *  credentials plus any that placed an order through the shared ones. */
+export function orgsWithOrders(): string[] {
+  const own = orgsWithIntegration('premiuminboxes');
+  const ordered = db.selectDistinct({ orgId: schema.providerOrders.orgId }).from(schema.providerOrders).all().map((r) => r.orgId);
+  return [...new Set([...own, ...ordered])].filter((orgId) => !!getIntegration(orgId, 'premiuminboxes'));
+}
+
 export async function syncAllOrders(): Promise<void> {
-  for (const orgId of orgsWithIntegration('premiuminboxes')) {
+  for (const orgId of orgsWithOrders()) {
     try {
       await syncOrders(orgId);
     } catch (err) {

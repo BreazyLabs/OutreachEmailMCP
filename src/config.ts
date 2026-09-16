@@ -23,6 +23,10 @@ const envSchema = z.object({
   // Bootstrap secret for the cross-tenant provisioning API (creating
   // workspaces + minting their keys). Unset = that surface is disabled.
   ADMIN_API_KEY: z.string().min(16).optional(),
+  // Workspace whose Namecheap / Premium Inboxes credentials every other
+  // workspace falls back to when it has none of its own: the embedding
+  // product buys domains and mailboxes on the platform's account.
+  SHARED_INTEGRATIONS_ORG_ID: z.string().min(1).optional(),
 
   HTTP_PORT: z.coerce.number().int().default(3000),
   HTTP_BIND: z.string().default('127.0.0.1'),

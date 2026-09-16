@@ -28,6 +28,7 @@ import { registerSendLogRoutes } from './api/send-log.js';
 import { registerWebhookRoutes } from './api/webhooks.js';
 import { registerStatsRoutes } from './api/stats.js';
 import { registerProvisioningRoutes } from './api/provisioning.js';
+import { registerDomainRoutes } from './api/domains.js';
 import { startSendWorker } from './queue/worker.js';
 import { startSmtpServer } from './smtp/server.js';
 import { startImapServer } from './imap/server.js';
@@ -49,6 +50,9 @@ async function main() {
     loggerInstance: logger.child({ component: 'http' }) as never,
     disableRequestLogging: true,
     bodyLimit: config.SMTP_MAX_SIZE,
+    // Route params default to 100 chars; a Microsoft Graph message id is
+    // ~150 and would 414 on /accounts/:id/messages/:messageId.
+    maxParamLength: 2048,
   }) as unknown as FastifyInstance;
 
   await app.register(fastifyCookie, {
@@ -100,6 +104,7 @@ async function main() {
       registerWebhookRoutes(api);
       registerStatsRoutes(api);
       registerWarmupRoutes(api);
+      registerDomainRoutes(api);
     },
     { prefix: '/api/v1' },
   );

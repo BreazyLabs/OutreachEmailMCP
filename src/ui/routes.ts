@@ -26,7 +26,10 @@ import {
   countAccounts,
   countSendsLast24h,
   planLimits,
+  getOrg,
+  QuotaError,
 } from '../tenancy/orgs.js';
+import { adoptAccount, AdoptError } from '../accounts/adopt.js';
 import {
   authenticateUser,
   createUiSession,
@@ -356,6 +359,40 @@ export function registerUiRoutes(app: FastifyInstance) {
         .where(eq(schema.smtpCredentials.id, credential.cred.id))
         .run();
       return reply.redirect(`/ui/accounts/${credential.cred.accountId}`);
+    },
+  );
+
+  // Move a mailbox into another workspace. Superadmin only: it is the one
+  // action that crosses workspace boundaries. Tokens, credentials and history
+  // follow the account id (see adoptAccount); the target's plan is enforced.
+  app.post<{ Params: { accountId: string }; Body: { orgId?: string } }>(
+    '/ui/accounts/:accountId/move',
+    async (req, reply) => {
+      const session = guardPost(req, reply);
+      if (!session) return;
+      const account = db
+        .select()
+        .from(schema.accounts)
+        .where(and(eq(schema.accounts.id, req.params.accountId), eq(schema.accounts.orgId, session.org.id)))
+        .get();
+      if (!account) return reply.code(404).send('Unknown account');
+      const back = `/ui/accounts/${account.id}`;
+      if (!session.isSuperuser) return reply.redirect(`${back}?error=` + encodeURIComponent('Only a platform admin can move mailboxes between workspaces.'));
+      const targetOrgId = String(req.body?.orgId ?? '').trim();
+      if (!targetOrgId || targetOrgId === session.org.id) {
+        return reply.redirect(`${back}?error=` + encodeURIComponent('Pick a different workspace to move this mailbox into.'));
+      }
+      try {
+        adoptAccount(targetOrgId, account.id);
+        const targetName = getOrg(targetOrgId)?.name ?? targetOrgId;
+        // The mailbox has left the workspace being viewed, so send the admin
+        // to the Mailboxes list rather than a now-foreign account page.
+        return reply.redirect('/ui?notice=' + encodeURIComponent(`Moved ${account.email} to ${targetName}.`));
+      } catch (err) {
+        if (err instanceof AdoptError) return reply.redirect(`${back}?error=` + encodeURIComponent(err.message));
+        if (err instanceof QuotaError) return reply.redirect(`${back}?error=` + encodeURIComponent(`That workspace is full or suspended: ${err.message}`));
+        throw err;
+      }
     },
   );
 

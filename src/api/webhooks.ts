@@ -5,7 +5,7 @@ import { nanoid } from 'nanoid';
 import { db, schema } from '../db/index.js';
 import { encryptSecret, decryptSecret } from '../crypto/secrets.js';
 import { randomBase62 } from '../crypto/credentials.js';
-import { isPrivateWebhookTarget } from '../inbound/webhooks.js';
+import { isPrivateWebhookTarget, WEBHOOK_EVENTS } from '../inbound/webhooks.js';
 import { config } from '../config.js';
 import { loadAccount, orgOf, requireScope } from './plugin.js';
 import type { Webhook } from '../db/schema.js';
@@ -13,7 +13,7 @@ import type { Webhook } from '../db/schema.js';
 const createSchema = z.object({
   url: z.string().url().startsWith('http'),
   accountId: z.string().optional(),
-  events: z.array(z.enum(['message.received'])).min(1).default(['message.received']),
+  events: z.array(z.enum(WEBHOOK_EVENTS)).min(1).default(['message.received']),
 });
 
 function publicWebhook(w: Webhook, includeSecret = false) {

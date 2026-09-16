@@ -8,6 +8,7 @@ import { and, eq } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { db, schema } from '../db/index.js';
 import { encryptSecret, decryptSecret } from '../crypto/secrets.js';
+import { config } from '../config.js';
 import type { NamecheapConfig } from './namecheap.js';
 import type { PiHosting } from './premiuminboxes.js';
 
@@ -37,7 +38,7 @@ export interface PremiumInboxesConfig {
 export type IntegrationProvider = 'namecheap' | 'premiuminboxes';
 type ConfigOf<P extends IntegrationProvider> = P extends 'namecheap' ? NamecheapConfig : PremiumInboxesConfig;
 
-export function getIntegration<P extends IntegrationProvider>(orgId: string, provider: P): ConfigOf<P> | null {
+function ownIntegration<P extends IntegrationProvider>(orgId: string, provider: P): ConfigOf<P> | null {
   const row = db
     .select()
     .from(schema.integrations)
@@ -49,6 +50,31 @@ export function getIntegration<P extends IntegrationProvider>(orgId: string, pro
   } catch {
     return null;
   }
+}
+
+/** The workspace other workspaces borrow registrar/provisioner credentials from, if any. */
+export function sharedIntegrationsOrg(): string | null {
+  return process.env.SHARED_INTEGRATIONS_ORG_ID?.trim() || config.SHARED_INTEGRATIONS_ORG_ID || null;
+}
+
+/** Where a workspace's credentials for a provider come from: its own row, the
+ *  shared platform workspace, or nowhere. */
+export function integrationSource(orgId: string, provider: IntegrationProvider): 'own' | 'shared' | null {
+  if (ownIntegration(orgId, provider)) return 'own';
+  const shared = sharedIntegrationsOrg();
+  if (shared && shared !== orgId && ownIntegration(shared, provider)) return 'shared';
+  return null;
+}
+
+/** A workspace's own config when it has one, else the shared workspace's
+ *  (SHARED_INTEGRATIONS_ORG_ID) so an embedded tenant can buy on the
+ *  platform's account without holding the platform's keys. */
+export function getIntegration<P extends IntegrationProvider>(orgId: string, provider: P): ConfigOf<P> | null {
+  const own = ownIntegration(orgId, provider);
+  if (own) return own;
+  const shared = sharedIntegrationsOrg();
+  if (shared && shared !== orgId) return ownIntegration(shared, provider);
+  return null;
 }
 
 export function getIntegrationRow(orgId: string, provider: IntegrationProvider) {

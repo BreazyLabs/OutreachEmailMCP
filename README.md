@@ -160,6 +160,14 @@ curl -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
        "attachments":[{"filename":"a.txt","contentBase64":"aGVsbG8="}]}' \
   localhost:3000/api/v1/accounts/$ACCOUNT_ID/messages
 
+# thread and correlate: stamp your own Message-ID (returned as `messageId`
+# in the 202 body), reply into an existing thread
+curl -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"to":["friend@example.com"],"subject":"Re: hi","text":"…",
+       "messageId":"<send-42@yourapp.example>","inReplyTo":"<their-id@example.com>",
+       "references":["<their-id@example.com>"]}' \
+  localhost:3000/api/v1/accounts/$ACCOUNT_ID/messages
+
 # check delivery status / browse the send log
 curl -H "Authorization: Bearer $KEY" localhost:3000/api/v1/accounts/$ACCOUNT_ID/send-jobs
 
@@ -200,6 +208,39 @@ curl -H "Authorization: Bearer $KEY" "localhost:3000/api/v1/bounces?days=30"
 refused the submission, `bounced` means it was accepted and the receiving system
 rejected it afterwards.
 
+### Domains API
+
+Everything the **Domains** page does (see below), for a product that embeds this
+gateway. Same workspace key; `read` for listing, `accounts` for anything that
+buys, orders or syncs. Delivered mailboxes are listed **without their
+passwords** — the OAuth consent is the only way in, so the password is never
+needed outside the gateway.
+
+| Route | Does |
+|---|---|
+| `GET /domains` | `{ domains, orders, integrations, hubLink, defaultTlds, patterns, pricePerInboxCents }` |
+| `POST /domains/find` `{brand?, tlds?, domains?}` | suggest names for a brand (or check a hand-typed list) → `{ candidates, balance }` |
+| `POST /domains/estimate` `{domains, inboxesPerDomain}` | registration + inbox prices, Namecheap balance |
+| `POST /domains/batch` | buy the new domains, order mailboxes on all of them → `{ bought, order, orderError }` |
+| `POST /domains/orders/sync` | mirror the provisioner's orders now |
+| `POST /domains/import` | adopt domains of connected mailboxes, import the registrar's list |
+| `GET /domains/orders/:id` | one order with its delivered addresses and whether each is connected |
+
+```bash
+curl -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"domains":["getacme.nl"],"forwardedDomain":"acme.nl","emailProvider":"google",
+       "inboxesPerDomain":2,"prefixVariants":["first","first.last"],
+       "personas":[{"domain":"getacme.nl","firstName":"Ann","lastName":"Lee"}]}' \
+  localhost:3000/api/v1/domains/batch
+```
+
+Registrar/provisioner errors come back as `502 {error}`; validation as `400`;
+a workspace with no credentials for the step as `409`. Set
+`SHARED_INTEGRATIONS_ORG_ID` to the workspace whose Namecheap and Premium
+Inboxes credentials every other workspace falls back to when it has none of
+its own — the embedding product then buys on the platform's account, and the
+`integrations.*.shared` flag in `GET /domains` says so.
+
 ### Provisioning API (embedding this gateway in another product)
 
 Set `ADMIN_API_KEY` to enable a small cross-tenant surface for a product that
@@ -221,6 +262,18 @@ curl -X POST -H "Authorization: Bearer $ADMIN_API_KEY" localhost:3000/api/v1/adm
 
 The embedding product then uses the returned workspace key for everything else:
 mint a connect link for the end user, list mailboxes, send, and pull stats.
+
+Two more admin routes move mailboxes between workspaces (for a product that
+connects a mailbox once and assigns it to a tenant later):
+
+```bash
+# every mailbox on the instance, with its workspace
+curl -H "Authorization: Bearer $ADMIN_API_KEY" localhost:3000/api/v1/admin/accounts
+# move one into a workspace: tokens, credentials and history follow the
+# account; the old workspace's webhooks pinned to it are dropped
+curl -X POST -H "Authorization: Bearer $ADMIN_API_KEY" -H "Content-Type: application/json" \
+  -d '{"accountId":"…"}' localhost:3000/api/v1/admin/orgs/$ORG_ID/accounts/adopt
+```
 
 ### Partner SSO (superadmin handoff)
 
