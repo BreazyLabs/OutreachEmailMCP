@@ -1,6 +1,6 @@
 import { getAccessToken } from '../auth/tokens.js';
 import { upstreamSignal } from './http.js';
-import { throwForResponse, PermanentError } from './errors.js';
+import { throwForResponse, PermanentError, RetryableError } from './errors.js';
 import type {
   Provider,
   Folder,
@@ -38,11 +38,17 @@ async function graphFetch(
   attempt = 0,
 ): Promise<Response> {
   const token = await getAccessToken(accountId);
-  const res = await fetch(url, {
-    ...init,
-    signal: init.signal ?? upstreamSignal(),
-    headers: { Authorization: `Bearer ${token}`, ...(init.headers ?? {}) },
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      ...init,
+      signal: init.signal ?? upstreamSignal(),
+      headers: { Authorization: `Bearer ${token}`, ...(init.headers ?? {}) },
+    });
+  } catch (err) {
+    // Network error or upstream timeout: retryable, not a permanent failure.
+    throw new RetryableError(`Graph request failed: ${String(err)}`);
+  }
   if (!res.ok) {
     // GET/PATCH/move are idempotent; absorb transient throttling with backoff
     // (Graph sends Retry-After on 429/503)
@@ -146,6 +152,15 @@ export const microsoftProvider: Provider = {
 
   supportsWrite(grantedScopes) {
     return grantedScopes.includes('Mail.ReadWrite');
+  },
+
+  async findSentMessageId(accountId, messageId) {
+    const id = messageId.trim();
+    if (!id) return null;
+    const params = new URLSearchParams({ $filter: `internetMessageId eq '${id.replace(/'/g, "''")}'`, $select: 'id', $top: '1' });
+    const res = await graphFetch(accountId, `${GRAPH}/me/messages?${params}`);
+    const body = (await res.json()) as { value?: { id: string }[] };
+    return body.value?.[0]?.id ?? null;
   },
 
   async fetchProfile(accountId) {

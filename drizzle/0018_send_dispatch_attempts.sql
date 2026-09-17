@@ -1,0 +1,1 @@
+ALTER TABLE `send_jobs` ADD `dispatch_attempts` integer DEFAULT 0 NOT NULL;

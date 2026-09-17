@@ -24,7 +24,7 @@ const workerId = `worker-${nanoid(8)}`;
 let running = false;
 let stopped = false;
 
-async function processJob(job: SendJob): Promise<void> {
+export async function processJob(job: SendJob): Promise<void> {
   const account = db
     .select()
     .from(schema.accounts)
@@ -48,6 +48,22 @@ async function processJob(job: SendJob): Promise<void> {
   const envelope = JSON.parse(job.envelopeJson) as { to: string[] };
   const jobDetail = `job=${job.id} attempt=${job.attempts + 1} to=${envelope.to.join(',')} subject=${job.subject ?? ''}`.slice(0, 400);
   try {
+    // A re-dispatched job (reaped after a crash, or retried after a network
+    // error) may already have gone out on the earlier attempt. Ask the
+    // provider whether a message with this Message-ID is already sent before
+    // sending again; if so, adopt it instead of delivering a duplicate. Only
+    // on re-dispatch (dispatchAttempts > 1), so first sends pay no extra call.
+    if (job.dispatchAttempts > 1 && job.messageId) {
+      const already = await providerFor(account.provider).findSentMessageId(job.accountId, job.messageId);
+      if (already) {
+        markSent(job.id, already);
+        if (job.source === 'warmup') onWarmupJobSent(job);
+        else emitSendOutcome(account, job.id);
+        logger.warn({ jobId: job.id, account: account.email, providerMessageId: already }, 'job already delivered on a prior attempt; adopted, not resent');
+        logActivity({ category: 'delivery', action: 'deduped-resend', status: 'ok', accountId: account.id, detail: jobDetail });
+        return;
+      }
+    }
     const providerMessageId = await providerFor(account.provider).sendRaw(job.accountId, raw);
     markSent(job.id, providerMessageId);
     if (job.source === 'warmup') onWarmupJobSent(job);

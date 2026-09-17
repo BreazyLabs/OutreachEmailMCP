@@ -1,6 +1,6 @@
 import { getAccessToken } from '../auth/tokens.js';
 import { upstreamSignal } from './http.js';
-import { throwForResponse, PermanentError } from './errors.js';
+import { throwForResponse, PermanentError, RetryableError } from './errors.js';
 import type {
   Provider,
   Folder,
@@ -29,11 +29,18 @@ async function gmailFetch(
   attempt = 0,
 ): Promise<Response> {
   const token = await getAccessToken(accountId);
-  const res = await fetch(url, {
-    ...init,
-    signal: init.signal ?? upstreamSignal(),
-    headers: { Authorization: `Bearer ${token}`, ...(init.headers ?? {}) },
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      ...init,
+      signal: init.signal ?? upstreamSignal(),
+      headers: { Authorization: `Bearer ${token}`, ...(init.headers ?? {}) },
+    });
+  } catch (err) {
+    // A network error or the upstream timeout is transient: make it retryable
+    // (like a 5xx) rather than a permanent send failure.
+    throw new RetryableError(`Gmail request failed: ${String(err)}`);
+  }
   if (!res.ok) {
     // Reads and label-modifies are idempotent: absorb transient 429/5xx with
     // backoff (honoring Retry-After) instead of surfacing them
@@ -138,6 +145,14 @@ export const googleProvider: Provider = {
 
   supportsWrite(grantedScopes) {
     return grantedScopes.includes('gmail.modify');
+  },
+
+  async findSentMessageId(accountId, messageId) {
+    const bare = messageId.replace(/^<|>$/g, '').trim();
+    if (!bare) return null;
+    const res = await gmailFetch(accountId, `${API}/messages?q=${encodeURIComponent('rfc822msgid:' + bare)}&maxResults=1`);
+    const body = (await res.json()) as { messages?: { id: string }[] };
+    return body.messages?.[0]?.id ?? null;
   },
 
   async fetchProfile(accountId) {

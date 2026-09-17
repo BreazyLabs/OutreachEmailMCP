@@ -74,6 +74,10 @@ export interface Provider {
   /** The mailbox owner's name as the provider has it (send-as name on Gmail,
    *  the directory entry on Microsoft). Fields are null when unknown. */
   fetchProfile(accountId: string): Promise<ProviderProfile>;
+  /** The provider id of a message this mailbox already sent carrying the given
+   *  RFC822 Message-ID (brackets included), or null if none — used to avoid
+   *  re-sending a job that may have gone out before a crash. */
+  findSentMessageId(accountId: string, messageId: string): Promise<string | null>;
   /** Newest message ids in a canonical folder (up to limit). */
   listMessageIds(accountId: string, folder: CanonicalFolder, limit: number): Promise<string[]>;
   /**

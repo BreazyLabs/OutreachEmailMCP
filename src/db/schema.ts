@@ -144,6 +144,10 @@ export const sendJobs = sqliteTable(
     // later (Graph sendMail returns no id, but supports internetMessageId lookup)
     messageId: text('message_id'),
     attempts: integer('attempts').notNull().default(0),
+    // How many times the job has been claimed for sending; >1 means it was
+    // re-dispatched (reaped after a crash, or retried), the only case that can
+    // double-send, so the worker verifies the provider before sending again.
+    dispatchAttempts: integer('dispatch_attempts').notNull().default(0),
     maxAttempts: integer('max_attempts').notNull().default(8),
     nextAttemptAt: integer('next_attempt_at').notNull(),
     lockedAt: integer('locked_at'),

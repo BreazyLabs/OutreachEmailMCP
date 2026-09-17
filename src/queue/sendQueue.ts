@@ -65,7 +65,8 @@ export function enqueueSend(input: {
 
 const claimStmt = () =>
   sqlite.prepare(`
-    UPDATE send_jobs SET status = 'sending', locked_at = @now, locked_by = @worker
+    UPDATE send_jobs SET status = 'sending', locked_at = @now, locked_by = @worker,
+           dispatch_attempts = dispatch_attempts + 1
     WHERE id IN (
       SELECT id FROM (
         SELECT j.id AS id, MIN(j.next_attempt_at)
@@ -102,6 +103,7 @@ function rowToJob(r: Record<string, unknown>): SendJob {
     subject: r.subject,
     messageId: r.message_id,
     attempts: r.attempts,
+    dispatchAttempts: r.dispatch_attempts,
     maxAttempts: r.max_attempts,
     nextAttemptAt: r.next_attempt_at,
     lockedAt: r.locked_at,
