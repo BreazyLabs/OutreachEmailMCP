@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { simpleParser } from 'mailparser';
+import { messageDetailOf } from './message-detail.js';
 import { providerFor } from '../providers/index.js';
 import { loadAccount, requireScope } from './plugin.js';
 import { filterSummaries, isWarmupMessage } from '../warmup/identity.js';
@@ -91,26 +92,7 @@ export function registerReadRoutes(app: FastifyInstance) {
       subject: parsed.subject ?? null,
       text: parsed.text ?? null,
     }).warmup;
-    return {
-      id: req.params.messageId,
-      // Fetching by id is deliberate, so warmup mail is returned — flagged.
-      warmup,
-      from: parsed.from?.text ?? null,
-      to: Array.isArray(parsed.to) ? parsed.to.map((t) => t.text).join(', ') : parsed.to?.text ?? null,
-      cc: Array.isArray(parsed.cc) ? parsed.cc.map((t) => t.text).join(', ') : parsed.cc?.text ?? null,
-      subject: parsed.subject ?? null,
-      date: parsed.date?.toISOString() ?? null,
-      messageId: parsed.messageId ?? null,
-      inReplyTo: parsed.inReplyTo ?? null,
-      text: parsed.text ?? null,
-      html: parsed.html || null,
-      attachments: parsed.attachments.map((a, index) => ({
-        id: String(index),
-        filename: a.filename ?? `attachment-${index}`,
-        contentType: a.contentType,
-        size: a.size,
-      })),
-    };
+    return messageDetailOf(req.params.messageId, parsed, warmup);
   });
 
   app.get<{ Params: { accountId: string; messageId: string; attachmentId: string } }>(

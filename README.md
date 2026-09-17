@@ -174,7 +174,7 @@ curl -H "Authorization: Bearer $KEY" localhost:3000/api/v1/accounts/$ACCOUNT_ID/
 # read mail
 curl -H "Authorization: Bearer $KEY" "localhost:3000/api/v1/accounts/$ACCOUNT_ID/folders"
 curl -H "Authorization: Bearer $KEY" "localhost:3000/api/v1/accounts/$ACCOUNT_ID/messages?folder=INBOX&limit=10"
-curl -H "Authorization: Bearer $KEY" "localhost:3000/api/v1/accounts/$ACCOUNT_ID/messages/$MSG_ID"          # parsed
+curl -H "Authorization: Bearer $KEY" "localhost:3000/api/v1/accounts/$ACCOUNT_ID/messages/$MSG_ID"          # parsed: from/to/cc/replyTo, subject, text/html, inReplyTo + references (full thread), attachments[]
 curl -H "Authorization: Bearer $KEY" "localhost:3000/api/v1/accounts/$ACCOUNT_ID/messages/$MSG_ID?format=raw" # rfc822
 curl -H "Authorization: Bearer $KEY" -O "localhost:3000/api/v1/accounts/$ACCOUNT_ID/messages/$MSG_ID/attachments/0"
 ```
