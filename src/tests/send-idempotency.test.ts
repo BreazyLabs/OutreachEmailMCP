@@ -73,3 +73,36 @@ describe('send idempotency on caller Message-ID', () => {
     await app.close();
   });
 });
+
+describe('GET send-jobs?messageId= lookup', () => {
+  let orgId: string;
+  beforeAll(async () => {
+    const { runMigrations, db, schema } = await import('../db/index.js');
+    runMigrations();
+    const { createOrgWithOwner } = await import('../tenancy/orgs.js');
+    orgId = createOrgWithOwner({ orgName: 'Lookup', email: 'o@lookup.test', password: 'pw-pw-pw-pw-1' }).orgId;
+    const now = Date.now();
+    db.insert(schema.accounts).values({ id: 'lk1', orgId, provider: 'google', email: 's@lookup.test', displayName: null, status: 'active', createdAt: now, updatedAt: now }).run();
+  });
+
+  it('returns the job for a known Message-ID and 404 for an unknown one', async () => {
+    const Fastify = (await import('fastify')).default;
+    const { registerSendLogRoutes } = await import('../api/send-log.js');
+    const { enqueueSend } = await import('../queue/sendQueue.js');
+    const app = Fastify();
+    app.addHook('preHandler', async (req) => { (req as any).orgId = orgId; (req as any).scopes = ['*']; });
+    await app.register(async (api) => registerSendLogRoutes(api as any), { prefix: '/api/v1' });
+    const raw = Buffer.from('Message-ID: <cs-lookup@thread.breazyleads.com>\r\nSubject: s\r\n\r\nb');
+    const job = enqueueSend({ accountId: 'lk1', source: 'api', raw, envelope: { from: 's@lookup.test', to: ['x@to.test'] }, subject: 's' });
+    const hit = await app.inject({ method: 'GET', url: '/api/v1/accounts/lk1/send-jobs?messageId=' + encodeURIComponent('CS-LOOKUP@thread.breazyleads.com') });
+    expect(hit.statusCode).toBe(200);
+    expect(hit.json().id).toBe(job.id);
+    expect(hit.json().messageId).toBe('<cs-lookup@thread.breazyleads.com>');
+    const miss = await app.inject({ method: 'GET', url: '/api/v1/accounts/lk1/send-jobs?messageId=' + encodeURIComponent('<cs-none@thread.breazyleads.com>') });
+    expect(miss.statusCode).toBe(404);
+    const list = await app.inject({ method: 'GET', url: '/api/v1/accounts/lk1/send-jobs' });
+    expect(list.statusCode).toBe(200);
+    expect(Array.isArray(list.json())).toBe(true);
+    await app.close();
+  });
+});

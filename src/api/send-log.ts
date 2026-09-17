@@ -3,6 +3,7 @@ import { and, desc, eq, ne } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '../db/index.js';
 import { loadAccount, requireScope } from './plugin.js';
+import { findRecentJobByMessageId } from '../queue/sendQueue.js';
 import type { SendJob } from '../db/schema.js';
 
 export function publicJob(j: SendJob) {
@@ -42,6 +43,15 @@ export function registerSendLogRoutes(app: FastifyInstance) {
       if (!requireScope(req, reply, 'read')) return;
       const account = loadAccount(req.params.accountId, req);
       if (!account) return reply.code(404).send({ error: 'Unknown account' });
+      // Look one job up by the caller's Message-ID (same normalisation and
+      // 7-day window as submit-time dedup), so a caller whose submit timed out
+      // can tell whether the send was ever enqueued. 404 = it was not.
+      const wanted = typeof req.query.messageId === 'string' ? req.query.messageId : null;
+      if (wanted) {
+        const job = findRecentJobByMessageId(account.id, wanted);
+        if (!job) return reply.code(404).send({ error: 'No send job with that Message-ID in the last 7 days' });
+        return publicJob(job);
+      }
       const query = listQuery.parse(req.query);
       const conditions = [eq(schema.sendJobs.accountId, account.id)];
       if (query.status) conditions.push(eq(schema.sendJobs.status, query.status));
