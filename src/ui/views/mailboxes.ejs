@@ -34,6 +34,7 @@
   .health.healthy { color:var(--ok); } .health.healthy .dot { background:var(--ok); }
   .health.watch { color:var(--warn); } .health.watch .dot { background:var(--warn); }
   .health.at_risk { color:var(--err); } .health.at_risk .dot { background:var(--err); }
+  .health.cant_send { color:var(--err); font-weight:700; } .health.cant_send .dot { background:var(--err); box-shadow:0 0 0 3px color-mix(in srgb, var(--err) 22%, transparent); }
   .health.no_data { color:var(--muted); } .health.no_data .dot { background:var(--muted); }
   .health.off { color:var(--muted); } .health.off .dot { background:transparent; border:1px solid var(--muted); }
   .num { font-variant-numeric:tabular-nums; text-align:right; white-space:nowrap; }
@@ -147,10 +148,10 @@
 
 <% if (overview.accounts.length > 0) { %>
 <div class="kpis">
-  <div class="kpi <%= orgHealth.label === 'healthy' ? 'good' : orgHealth.label === 'watch' ? 'warn' : orgHealth.label === 'at_risk' ? 'bad' : '' %>">
+  <div class="kpi <%= orgHealth.label === 'healthy' ? 'good' : orgHealth.label === 'watch' ? 'warn' : (orgHealth.label === 'at_risk' || orgHealth.label === 'cant_send') ? 'bad' : '' %>">
     <div class="n"><%= orgHealth.score === null ? '—' : orgHealth.score %><% if (orgHealth.score !== null) { %><small>/100</small><% } %></div>
     <div class="l">workspace health · <%= healthLabels[orgHealth.label] %></div>
-    <div class="mini"><%= orgHealth.counts.healthy %> healthy · <%= orgHealth.counts.watch %> watch · <%= orgHealth.counts.at_risk %> at risk · <%= orgHealth.counts.no_data %> warming up</div>
+    <div class="mini"><%= orgHealth.counts.healthy %> healthy · <%= orgHealth.counts.watch %> watch · <%= orgHealth.counts.at_risk %> at risk<% if (orgHealth.counts.cant_send) { %> · <strong style="color:var(--err)"><%= orgHealth.counts.cant_send %> can't send</strong><% } %> · <%= orgHealth.counts.no_data %> warming up</div>
   </div>
   <div class="kpi <%= inboxRate7d === null ? '' : inboxRate7d >= 90 ? 'good' : inboxRate7d >= 75 ? 'warn' : 'bad' %>"><div class="n"><%= fmtPct(inboxRate7d) %></div><div class="l">inbox rate · 7 days</div><div class="mini"><%= t.inbox7d %> of <%= decided7d %> placed</div></div>
   <div class="kpi <%= spamRate7d === null ? '' : spamRate7d <= 2 ? 'good' : spamRate7d <= 10 ? 'warn' : 'bad' %>"><div class="n"><%= fmtPct(spamRate7d) %></div><div class="l">spam + missing · 7 days</div><div class="mini"><%= t.spam7d %> spam · <%= t.missing7d %> missing · <%= t.rescued7d %> rescued</div></div>
@@ -190,7 +191,7 @@
     <div class="toolbar">
       <input type="search" id="q" placeholder="Search email, domain, tag…" autocomplete="off">
       <select id="f-state"><option value="">Any state</option><option value="enabled">Enabled</option><option value="off">Off</option><option value="ramping">Ramping</option><option value="steady">Steady</option><option value="paused">Paused</option><option value="auto_paused">Auto-paused</option><option value="blocked_upstream">Blocked</option><option value="attention">Needs attention</option></select>
-      <select id="f-health"><option value="">Any health</option><option value="healthy">Healthy</option><option value="watch">Watch</option><option value="at_risk">At risk</option><option value="no_data">Warming up</option></select>
+      <select id="f-health"><option value="">Any health</option><option value="healthy">Healthy</option><option value="watch">Watch</option><option value="at_risk">At risk</option><option value="cant_send">Can't send</option><option value="no_data">Warming up</option></select>
       <select id="f-provider"><option value="">Any provider</option><option value="google">Gmail</option><option value="microsoft">Microsoft</option></select>
       <select id="f-domain"><option value="">Any domain</option><% for (const d of domains) { %><option value="<%= d %>"><%= d %></option><% } %></select>
       <select id="f-tag"><option value="">Any tag</option><% for (const tg of tags) { %><option value="<%= tg.tag.toLowerCase() %>"><%= tg.tag %> (<%= tg.count %>)</option><% } %><option value="-">Untagged</option></select>
@@ -257,7 +258,7 @@
         </td>
         <td>
           <span class="health <%= h.label %>" title="<%= h.reasons.join(' · ') %>"><span class="dot"></span><%= h.score === null ? healthLabels[h.label] : h.score %></span>
-          <% if (h.label === 'watch' || h.label === 'at_risk') { %><div class="reasons"><%= h.reasons[0] %></div><% } %>
+          <% if (h.label === 'watch' || h.label === 'at_risk' || h.label === 'cant_send') { %><div class="reasons"><%= h.reasons[0] %></div><% } %>
         </td>
         <td>
           <span class="badge <%= a.state %>"><%= stateLabel(a.state) %></span>

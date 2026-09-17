@@ -104,6 +104,7 @@
   .health.healthy { color:var(--ok); } .health.healthy .dot { background:var(--ok); }
   .health.watch { color:var(--warn); } .health.watch .dot { background:var(--warn); }
   .health.at_risk { color:var(--err); } .health.at_risk .dot { background:var(--err); }
+  .health.cant_send { color:var(--err); font-weight:700; } .health.cant_send .dot { background:var(--err); box-shadow:0 0 0 3px color-mix(in srgb, var(--err) 22%, transparent); }
   .health.no_data, .health.off { color:var(--muted); } .health.no_data .dot, .health.off .dot { background:var(--muted); }
   .legend { display:flex; gap:1rem; flex-wrap:wrap; font-size:0.78rem; color:var(--muted); margin:0.4rem 0 0; }
   .legend span::before { content:""; display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:0.35rem; vertical-align:-1px; background:var(--c); }

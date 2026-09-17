@@ -78,6 +78,12 @@ describe('warmup health and prefilled forms', () => {
     expect(healthOf({ ...base, placement7d: { inbox: 2, spam: 0, category: 0, missing: 0, bounced: 0, pending: 1, total: 3 } }).label).toBe('no_data');
     const stalled = { ...base, todaySent: 0, placement7d: { inbox: 0, spam: 0, category: 0, missing: 0, bounced: 0, pending: 0, total: 0 } };
     expect(healthOf(stalled).label).toBe('at_risk');
+    // Sent plenty, but nothing landed anywhere — not even spam: blocked/burned, its own label.
+    const burned = { ...base, placement7d: { inbox: 0, spam: 0, category: 0, missing: 12, bounced: 0, pending: 1, total: 13 } };
+    const bh = healthOf(burned);
+    expect(bh.label).toBe('cant_send');
+    expect(bh.score).toBe(0);
+    expect(bh.reasons[0]).toContain('vanished');
     const noDns = healthOf({ ...base, dns: { ...base.dns, spf: false, dkim: false, dmarc: false } });
     expect(noDns.score).toBe(60);
     expect(noDns.reasons.some((r) => r.includes('SPF'))).toBe(true);

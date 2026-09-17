@@ -11,7 +11,7 @@
 
 import type { AccountWarmupSummary } from './stats.js';
 
-export type HealthLabel = 'healthy' | 'watch' | 'at_risk' | 'no_data' | 'off';
+export type HealthLabel = 'healthy' | 'watch' | 'at_risk' | 'cant_send' | 'no_data' | 'off';
 
 export interface Health {
   score: number | null;
@@ -56,6 +56,17 @@ export function healthOf(a: AccountWarmupSummary): Health {
   }
 
   if (decided >= MIN_SAMPLES) {
+    // Total outbound blackhole: enough messages went out, and not one reached
+    // the inbox, a category, or even spam — they all vanished. That is not a
+    // placement problem the engine can warm away; the mailbox is blocked from
+    // sending or the domain is burned. Call it out on its own, ahead of the
+    // generic "X% missing" line, so it doesn't hide inside the missing rate.
+    if (p.inbox + p.category + p.spam === 0) {
+      reasons.unshift(
+        `Not sending: all ${decided} warmup message${decided === 1 ? '' : 's'} this week vanished — none reached the inbox or even spam. The mailbox is likely blocked from sending or the domain is burned; warmup cannot fix that.`,
+      );
+      return { score: 0, label: 'cant_send', reasons };
+    }
     const spamPct = (p.spam / decided) * 100;
     const missingPct = (p.missing / decided) * 100;
     const categoryPct = (p.category / decided) * 100;
@@ -94,7 +105,7 @@ export interface OrgHealth {
 
 /** Placement-weighted mean of the mailboxes that have data. */
 export function orgHealth(summaries: AccountWarmupSummary[]): OrgHealth {
-  const counts: Record<HealthLabel, number> = { healthy: 0, watch: 0, at_risk: 0, no_data: 0, off: 0 };
+  const counts: Record<HealthLabel, number> = { healthy: 0, watch: 0, at_risk: 0, cant_send: 0, no_data: 0, off: 0 };
   let weighted = 0;
   let weight = 0;
   for (const s of summaries) {
@@ -107,7 +118,7 @@ export function orgHealth(summaries: AccountWarmupSummary[]): OrgHealth {
     weight += w;
   }
   if (weight === 0) {
-    const anyEnabled = counts.no_data + counts.at_risk > 0;
+    const anyEnabled = counts.no_data + counts.at_risk + counts.cant_send > 0;
     return { score: null, label: anyEnabled ? 'no_data' : 'off', counts };
   }
   const score = Math.round(weighted / weight);
@@ -118,6 +129,7 @@ export const HEALTH_LABELS: Record<HealthLabel, string> = {
   healthy: 'Healthy',
   watch: 'Watch',
   at_risk: 'At risk',
+  cant_send: "Can't send",
   no_data: 'Warming up',
   off: 'Off',
 };
