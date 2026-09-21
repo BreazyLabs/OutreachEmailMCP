@@ -70,6 +70,27 @@ describe('Namecheap client', () => {
     await expect(client.pricing(['xyz']).then(() => client.check([]).then(() => (client as unknown as { call: (c: string, p: Record<string, string>) => Promise<unknown> }).call('nope', {})))).rejects.toBeInstanceOf(NamecheapError);
     expect(parseNamecheapDate('1/2/2030')).toBe(Date.UTC(2030, 0, 2));
   });
+
+  it('never sends more than 10 names of one ending in a check call', async () => {
+    const { NamecheapClient, checkBatches } = await import('../domains/namecheap.js');
+    const nl = Array.from({ length: 13 }, (_, i) => `klikr${i}.nl`);
+    const com = Array.from({ length: 45 }, (_, i) => `klikr${i}.com`);
+    const calls: string[][] = [];
+    const client = new NamecheapClient(cfg, fakeFetch((url) => {
+      const list = new URL(url).searchParams.get('DomainList')!.split(',');
+      calls.push(list);
+      return { body: xml(list.map((d) => `<DomainCheckResult Domain="${d}" Available="true" IsPremiumName="false" />`).join('')) };
+    }));
+    const avail = await client.check([...nl, ...com]);
+    expect(avail.map((a) => a.domain)).toEqual([...nl, ...com]);
+    for (const list of calls) {
+      expect(list.length).toBeLessThanOrEqual(50);
+      expect(list.filter((d) => d.endsWith('.nl')).length).toBeLessThanOrEqual(10);
+      expect(list.filter((d) => d.endsWith('.com')).length).toBeLessThanOrEqual(10);
+    }
+    expect(calls).toHaveLength(5);
+    expect(checkBatches(['a.nl', 'b.com', 'c.nl'], 50, 1)).toEqual([['a.nl', 'b.com'], ['c.nl']]);
+  });
 });
 
 describe('Premium Inboxes client and order flow', () => {

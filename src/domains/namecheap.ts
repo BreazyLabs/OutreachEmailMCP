@@ -107,11 +107,12 @@ export class NamecheapClient {
     return (api.CommandResponse ?? {}) as Record<string, unknown>;
   }
 
-  /** Up to 50 domains per call. */
+  /** Up to 50 domains per call, and at most 10 of one ending: with 11 or more
+   *  .nl names in a call Namecheap reports every .nl name in it as taken, with
+   *  no error (measured 2026-09-21). */
   async check(domains: string[]): Promise<Availability[]> {
     const out: Availability[] = [];
-    for (let i = 0; i < domains.length; i += 50) {
-      const batch = domains.slice(i, i + 50);
+    for (const batch of checkBatches(domains)) {
       const r = await this.call('namecheap.domains.check', { DomainList: batch.join(',') });
       for (const d of asArray(r.DomainCheckResult as Record<string, string> | Record<string, string>[])) {
         out.push({
@@ -122,7 +123,9 @@ export class NamecheapClient {
         });
       }
     }
-    return out;
+    // Batching regroups by ending; hand results back in the order asked.
+    const order = new Map(domains.map((d, i) => [d.toLowerCase(), i]));
+    return out.sort((a, b) => (order.get(a.domain) ?? Infinity) - (order.get(b.domain) ?? Infinity));
   }
 
   /** First-year registration price per TLD, in the account currency. */
@@ -253,6 +256,19 @@ export class NamecheapClient {
     }
     return out;
   }
+}
+
+/** Split a check into calls of at most `max` names with at most `perTld` of any one ending, in input order. */
+export function checkBatches(domains: string[], max = 50, perTld = 10): string[][] {
+  const batches: { names: string[]; perTld: Map<string, number> }[] = [];
+  for (const d of domains) {
+    const tld = d.slice(d.indexOf('.') + 1).toLowerCase();
+    let b = batches.find((x) => x.names.length < max && (x.perTld.get(tld) ?? 0) < perTld);
+    if (!b) batches.push((b = { names: [], perTld: new Map() }));
+    b.names.push(d);
+    b.perTld.set(tld, (b.perTld.get(tld) ?? 0) + 1);
+  }
+  return batches.map((b) => b.names);
 }
 
 /** Namecheap dates are MM/DD/YYYY. */
