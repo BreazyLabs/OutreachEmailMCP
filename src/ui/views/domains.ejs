@@ -203,14 +203,15 @@
         <tbody>
         <% for (const c of candidates) { %>
         <tr class="<%= c.available && !c.owned ? '' : 'dim' %>">
-          <td><% if (c.available && !c.owned) { %><input type="checkbox" name="domains" value="<%= c.domain %>" class="pick" data-price="<%= c.price || 0 %>" data-tld="<%= c.tld %>" <%= picked.has(c.domain) ? 'checked' : '' %>><% } %></td>
+          <td><% if (!c.owned) { %><input type="checkbox" name="domains" value="<%= c.domain %>" class="pick" data-price="<%= c.price || 0 %>" data-tld="<%= c.tld %>" <%- c.available ? '' : 'data-force="1" title="Namecheap says taken; tick to try registering it anyway"' %> <%= picked.has(c.domain) ? 'checked' : '' %>><% } %></td>
           <td><%= c.domain %></td>
-          <td class="muted"><%= c.owned ? 'yours' : c.available === null ? 'unknown' : c.available ? (c.premium ? 'available · premium' : 'available') : 'taken' %></td>
+          <td class="muted"><%= c.owned ? 'yours' : c.available === null ? 'unknown · tick to try anyway' : c.available ? (c.premium ? 'available · premium' : 'available') : 'taken · tick to try anyway' %></td>
           <td class="num"><%= c.price !== null ? c.price.toFixed(2) + ' ' + (c.currency || '') : '—' %></td>
         </tr>
         <% } %>
         </tbody>
       </table>
+      <p class="mini" style="margin:0.3rem 0 0">Namecheap sometimes calls a free domain taken, most often .nl names that were checked many times in a row. You can tick a taken domain to try registering it anyway: if it really is taken, Namecheap refuses it, nothing is charged, and the rest of the batch goes ahead.</p>
       <% } %>
       <% const known = new Set([...(candidates || []).map((c) => c.domain), ...idle.map((d) => d.domain)]); const unchecked = w.picked.filter((d) => !known.has(d)); %>
       <% if (unchecked.length) { %>
@@ -442,7 +443,7 @@
   document.getElementById('perDomain').addEventListener('input', cost);
   [first, last].forEach((el) => el.addEventListener('input', previews));
   const tickAll = document.getElementById('tick-all');
-  if (tickAll) tickAll.addEventListener('click', () => { picks().forEach((c) => { if (!c.dataset.owned) c.checked = true; }); cost(); });
+  if (tickAll) tickAll.addEventListener('click', () => { picks().forEach((c) => { if (!c.dataset.owned && !c.dataset.force) c.checked = true; }); cost(); });
   // Picture: a chosen file travels as a data URL; a URL is used as is.
   const picFile = document.getElementById('picFile'), picUrl = document.getElementById('pictureUrl'), preview = document.getElementById('picPreview'), picData = document.getElementById('pictureData');
   picFile.addEventListener('change', () => {
@@ -462,8 +463,9 @@
     if (!form.querySelector('[name=forwardedDomain]').value.trim()) { e.preventDefault(); alert('Fill in the forwarding domain: the website the new domains redirect to.'); return; }
     if (!form.querySelector('[name=patterns]:checked')) { e.preventDefault(); alert('Tick at least one address pattern.'); return; }
     const buy = on.filter((c) => !c.dataset.owned).length;
+    const forced = on.filter((c) => c.dataset.force).length;
     const per = Math.max(1, Number(document.getElementById('perDomain').value || 1));
-    if (!confirm((buy ? 'Register ' + buy + ' domain(s) at Namecheap now and ' : '') + 'order ' + on.length * per + ' mailbox(es) at Premium Inboxes? Both are billed to your accounts there.')) e.preventDefault();
+    if (!confirm((forced ? forced + ' of the ticked domains are marked taken; Namecheap will be asked to register them anyway and any it refuses are skipped.\n\n' : '') + (buy ? 'Register ' + buy + ' domain(s) at Namecheap now and ' : '') + 'order ' + on.length * per + ' mailbox(es) at Premium Inboxes? Both are billed to your accounts there.')) e.preventDefault();
   });
   // ---- draft: autosaved in the browser, exportable as JSON -----------------
   const DRAFT = 'oem.batch.draft';
