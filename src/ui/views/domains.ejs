@@ -10,6 +10,9 @@
   const deliveredTotal = orders.reduce((n, o) => n + o.delivered, 0);
   const connectedTotal = orders.reduce((n, o) => n + o.connected, 0);
   const idle = domains.filter((d) => d.status === 'purchased');
+  const withMailboxes = domains.filter((d) => d.status !== 'purchased');
+  const subCancelled = (sub) => !!sub && /cancel/i.test(sub.status);
+  const subLabel = (sub) => sub ? sub.status + ' · ' + (sub.priceCents / 100).toFixed(2) + ' / 4 wk' : '—';
   const autoRenewOn = domains.filter((d) => d.platform && d.registrar === 'namecheap' && d.registrarInfo.autoRenew);
   const stepClass = (s) => ({ purchased: 'paused', ordered: 'ramping', provisioned: 'queued', connected: 'active' })[s] || '';
   const w = wizard;
@@ -150,7 +153,7 @@
     <p class="empty">No orders yet<%= pi.configured ? '' : '. Connect Premium Inboxes under Integrations to place one' %>.</p>
   <% } else { %>
   <table>
-    <thead><tr><th>Placed</th><th>Order</th><th>Status</th><th>Provider</th><th>Domains</th><th class="num">Mailboxes</th><th>Issues</th><th></th></tr></thead>
+    <thead><tr><th>Placed</th><th>Order</th><th>Status</th><th>Provider</th><th>Domains</th><th class="num">Mailboxes</th><th>Subscription</th><th>Issues</th><th></th></tr></thead>
     <tbody>
     <% for (const o of orders) { const r = o.result; %>
     <tr>
@@ -160,6 +163,7 @@
       <td class="muted"><%= o.order.emailProvider %></td>
       <td class="muted" style="max-width:34ch"><%= o.domains.join(', ') %></td>
       <td class="num"><%= o.connected %><span class="muted">/<%= o.delivered || (r ? r.inboxes.total : '?') %></span></td>
+      <td><% const sub = r && r.subscription; %><% if (sub) { %><span class="badge <%= subCancelled(sub) ? 'failed' : 'active' %>"><%= sub.status %></span> <span class="muted" style="font-size:0.78rem"><%= (sub.priceCents / 100).toFixed(2) %> / 4 wk<%= sub.nextBillingDate ? (subCancelled(sub) ? ' · ends ' : ' · next ') + fmtDate(sub.nextBillingDate) : '' %></span><% } else { %><span class="muted">—</span><% } %></td>
       <td class="muted" style="max-width:30ch"><%= r && r.issues.length ? r.issues.map((i) => i.reason).join(' · ') : '' %></td>
       <td><button type="button" class="ghost" style="padding:0.2rem 0.6rem; font-size:0.78rem" data-open="dlg-order-<%= o.order.id %>">Mailboxes</button></td>
     </tr>
@@ -213,7 +217,7 @@
       </table>
       <p class="mini" style="margin:0.3rem 0 0">Namecheap sometimes calls a free domain taken, most often .nl names that were checked many times in a row. You can tick a taken domain to try registering it anyway: if it really is taken, Namecheap refuses it, nothing is charged, and the rest of the batch goes ahead.</p>
       <% } %>
-      <% const known = new Set([...(candidates || []).map((c) => c.domain), ...idle.map((d) => d.domain)]); const unchecked = w.picked.filter((d) => !known.has(d)); %>
+      <% const known = new Set([...(candidates || []).map((c) => c.domain), ...idle.map((d) => d.domain), ...withMailboxes.map((d) => d.domain)]); const unchecked = w.picked.filter((d) => !known.has(d)); %>
       <% if (unchecked.length) { %>
       <p class="muted" style="margin:0.8rem 0 0.3rem">Ticked but not checked yet, press <b>Check availability</b> for prices:</p>
       <div class="picklist"><% for (const d of unchecked) { %><label><input type="checkbox" name="domains" value="<%= d %>" class="pick" data-price="0" checked> <%= d %></label><% } %></div>
@@ -221,6 +225,12 @@
       <% if (idle.length) { %>
       <p class="muted" style="margin:0.8rem 0 0.3rem">Domains you already own with no mailboxes yet, free to add to this batch:</p>
       <div class="picklist"><% for (const d of idle) { %><label><input type="checkbox" name="domains" value="<%= d.domain %>" class="pick" data-price="0" data-owned="1" <%= picked.has(d.domain) ? 'checked' : '' %>> <%= d.domain %></label><% } %></div>
+      <% } %>
+      <% if (withMailboxes.length) { %>
+      <details style="margin-top:0.8rem" <%= withMailboxes.some((d) => picked.has(d.domain)) ? 'open' : '' %>><summary class="muted" style="cursor:pointer">Domains that already have mailboxes (<%= withMailboxes.length %>): order more on them</summary>
+      <p class="mini" style="margin:0.3rem 0">A new order adds mailboxes next to the ones already there and is billed as its own subscription. Pick addresses that do not exist on the domain yet.</p>
+      <div class="picklist"><% for (const d of withMailboxes) { %><label><input type="checkbox" name="domains" value="<%= d.domain %>" class="pick" data-price="0" data-owned="1" <%= picked.has(d.domain) ? 'checked' : '' %>> <%= d.domain %> <span class="muted">· <%= Math.max(d.mailboxes.delivered, d.mailboxes.connected) %> now</span></label><% } %></div>
+      </details>
       <% } %>
 
       <h3><span class="n">2</span> Mailboxes</h3>
@@ -295,6 +305,25 @@
 <% } %></textarea>
         </details>
         <% } %>
+      <% } %>
+      <% const sub = r && r.subscription; %>
+      <h3 class="sect" style="margin-top:1.2rem">Subscription</h3>
+      <% if (!sub) { %>
+        <p class="muted">Not seen yet. It shows up after the next order check; use <b>Check orders now</b> to look sooner.</p>
+      <% } else if (subCancelled(sub)) { %>
+        <div class="note bad">Cancelled<%= sub.cancelledAt ? ' on ' + fmtDate(sub.cancelledAt) : '' %>. Premium Inboxes removes the mailboxes<%= sub.nextBillingDate ? ' when the paid period ends on ' + fmtDate(sub.nextBillingDate) : ' soon' %>; until then it can be reactivated.</div>
+        <form method="post" action="/ui/domains/orders/<%= o.order.id %>/reactivate" style="margin-top:0.5rem">
+          <input type="hidden" name="_csrf" value="<%= csrf %>">
+          <button type="submit" class="secondary" data-confirm="Reactivate this subscription? Premium Inboxes bills it again from the next billing date.">Reactivate subscription</button>
+        </form>
+      <% } else { %>
+        <p class="muted" style="margin:0 0 0.5rem"><%= sub.status %> · <%= (sub.priceCents / 100).toFixed(2) %> USD per 4 weeks<%= sub.nextBillingDate ? ' · next billing ' + fmtDate(sub.nextBillingDate) : '' %>. Cancelling stops billing for every mailbox in this order (<%= o.domains.length %> domain<%= o.domains.length === 1 ? '' : 's' %>); the domains stay yours and can get a new order.</p>
+        <form method="post" action="/ui/domains/orders/<%= o.order.id %>/cancel" class="row" style="align-items:flex-end; gap:0.6rem; flex-wrap:wrap">
+          <input type="hidden" name="_csrf" value="<%= csrf %>">
+          <div class="field" style="margin:0; flex:1; min-width:220px"><label>Reason, for Premium Inboxes</label><input name="reason" placeholder="Campaign finished"></div>
+          <label style="font-size:0.85rem"><input type="checkbox" name="removeImmediately" value="1"> Remove the mailboxes now, not at the end of the paid period</label>
+          <button type="submit" class="danger" data-confirm="Cancel the subscription for all <%= o.delivered || (r ? r.inboxes.total : '') %> mailboxes in this order at Premium Inboxes?">Cancel subscription</button>
+        </form>
       <% } %>
     </div>
     <footer><span class="left">Placed <%= fmtWhen(o.order.createdAt) %> · last checked <%= fmtWhen(o.order.lastCheckedAt) %></span><button type="button" class="secondary" data-close>Close</button></footer>

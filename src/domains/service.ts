@@ -14,7 +14,7 @@ import { createConnectHubLink } from '../auth/connect-links.js';
 import { domainHealthFor, dnsVerdict, issuesOf } from '../warmup/dns-health.js';
 import { parseTags } from '../accounts/tags.js';
 import { NamecheapClient, type Availability, type TldPrice } from './namecheap.js';
-import { PremiumInboxesClient, PI_SEQUENCER_OTHER, type PiOrder, type PiPurchase, type PiDeliveredEmail } from './premiuminboxes.js';
+import { PremiumInboxesClient, PI_SEQUENCER_OTHER, type PiOrder, type PiPurchase, type PiDeliveredEmail, type PiSubscription } from './premiuminboxes.js';
 import { getIntegration, setIntegration, markIntegration, orgsWithIntegration } from './integrations.js';
 import { suggestDomains, splitDomain, type Suggestion } from './names.js';
 import { localParts } from './patterns.js';
@@ -235,6 +235,18 @@ export interface OrderResult {
   inboxes: { total: number; perDomain: number };
   updatedAt: string;
   workspaceName?: string;
+  /** The subscription billing this order, when the provisioner listed it. */
+  subscription?: OrderSubscription;
+}
+
+export interface OrderSubscription {
+  id: string;
+  /** The provisioner's status, e.g. Active, Cancelled, Future. */
+  status: string;
+  /** Per 4 weeks, in cents. */
+  priceCents: number;
+  nextBillingDate: string | null;
+  cancelledAt: string | null;
 }
 
 /** Build the purchase body the way the provisioner wants it. Exported for tests. */
@@ -428,8 +440,8 @@ export function listOrders(orgId: string): ProviderOrder[] {
   return db.select().from(schema.providerOrders).where(eq(schema.providerOrders.orgId, orgId)).all().sort((a, b) => b.createdAt - a.createdAt);
 }
 
-export function orderResult(order: ProviderOrder): OrderResult | null {
-  if (!order.resultEnc) return null;
+export function orderResult(order: ProviderOrder | undefined): OrderResult | null {
+  if (!order?.resultEnc) return null;
   try {
     return JSON.parse(decryptSecret(order.resultEnc)) as OrderResult;
   } catch {
@@ -454,12 +466,28 @@ export async function syncOrders(orgId: string): Promise<{ orders: number; deliv
   } catch (err) {
     logger.debug({ orgId, err: String(err) }, 'inbox price not learned');
   }
+  // Each order is billed by its own subscription, which names the order.
+  const subByOrder = new Map<string, OrderSubscription>();
+  try {
+    for (const sub of await pi.subscriptions()) {
+      for (const o of sub.orders ?? []) {
+        const id = typeof o === 'string' ? o : o?._id;
+        if (id) subByOrder.set(id, toOrderSubscription(sub));
+      }
+    }
+  } catch (err) {
+    logger.debug({ orgId, err: String(err) }, 'subscriptions not read');
+  }
   const local = listOrders(orgId);
   const byExternal = new Map(local.map((o) => [o.externalId, o]));
   const now = Date.now();
   let delivered = 0;
+  /** Per domain, every order that covers it, newest first after the sort below. */
+  const byDomain = new Map<string, { orderId: string; createdAt: number; active: boolean; emails: PiDeliveredEmail[] }[]>();
   for (const r of remote) {
     const emails = (r.emails ?? []).filter((e) => e && e.email);
+    const existing = byExternal.get(r._id);
+    const subscription = subByOrder.get(r._id) ?? orderResult(existing)?.subscription;
     const result: OrderResult = {
       emails,
       issues: r.issues ?? [],
@@ -467,8 +495,8 @@ export async function syncOrders(orgId: string): Promise<{ orders: number; deliv
       inboxes: r.inboxes ?? { total: 0, perDomain: 0 },
       updatedAt: r.updatedAt,
       workspaceName: r.workspaceName,
+      ...(subscription ? { subscription } : {}),
     };
-    const existing = byExternal.get(r._id);
     const patch = {
       status: r.status ?? 'unknown',
       resultEnc: encryptSecret(JSON.stringify(result)),
@@ -478,11 +506,14 @@ export async function syncOrders(orgId: string): Promise<{ orders: number; deliv
       ...(emails.length ? { deliveredAt: existing?.deliveredAt ?? now } : {}),
     };
     let orderId: string;
+    let createdAt: number;
     if (existing) {
       orderId = existing.id;
+      createdAt = existing.createdAt;
       db.update(schema.providerOrders).set(patch).where(eq(schema.providerOrders.id, existing.id)).run();
     } else {
       orderId = nanoid();
+      createdAt = Date.parse(r.createdAt) || now;
       db.insert(schema.providerOrders)
         .values({
           id: orderId,
@@ -492,32 +523,105 @@ export async function syncOrders(orgId: string): Promise<{ orders: number; deliv
           emailProvider: String(r.emailProvider).toLowerCase() === 'microsoft' ? 'microsoft' : 'google',
           domainsJson: JSON.stringify(r.domains ?? []),
           requestJson: JSON.stringify({ importedFromProvider: true }),
-          createdAt: Date.parse(r.createdAt) || now,
+          createdAt,
           ...patch,
         })
         .run();
     }
     if (emails.length) delivered++;
-    // Domains: ordered → provisioned when mailboxes exist → connected when every one is in the proxy.
-    const connectedEmails = new Set(
-      emails.length
-        ? db.select({ email: schema.accounts.email }).from(schema.accounts).where(and(eq(schema.accounts.orgId, orgId), inArray(schema.accounts.email, emails.map((e) => e.email.toLowerCase())))).all().map((a) => a.email)
-        : [],
-    );
+    const active = !isCancelled(r.status, subscription?.status);
     for (const domain of r.domains ?? []) {
-      const mine = emails.filter((e) => e.email.toLowerCase().endsWith('@' + domain.toLowerCase()));
-      const status: Domain['status'] = mine.length === 0 ? 'ordered' : mine.every((e) => connectedEmails.has(e.email.toLowerCase())) ? 'connected' : 'provisioned';
-      const row = db.select().from(schema.domains).where(and(eq(schema.domains.orgId, orgId), eq(schema.domains.domain, domain.toLowerCase()))).get();
-      if (row) {
-        // Never regress a connected domain because the provider list lags.
-        if (row.status === 'connected' && status !== 'connected') continue;
-        db.update(schema.domains).set({ status, orderId, updatedAt: now }).where(eq(schema.domains.id, row.id)).run();
-      } else {
-        upsertDomain(orgId, domain.toLowerCase(), { registrar: 'other', status, orderId });
-      }
+      const d = domain.toLowerCase();
+      const mine = emails.filter((e) => e.email.toLowerCase().endsWith('@' + d) && !/cancel/i.test(e.status ?? ''));
+      byDomain.set(d, [...(byDomain.get(d) ?? []), { orderId, createdAt, active, emails: mine }]);
+    }
+  }
+  // Domains: ordered → provisioned when mailboxes exist → connected when every
+  // one is in the proxy, across all live orders on the domain; a domain whose
+  // orders are all cancelled is idle again, free for a new order.
+  const allEmails = [...byDomain.values()].flatMap((os) => os.flatMap((o) => o.emails.map((e) => e.email.toLowerCase())));
+  const connectedEmails = new Set(
+    allEmails.length
+      ? db.select({ email: schema.accounts.email }).from(schema.accounts).where(and(eq(schema.accounts.orgId, orgId), inArray(schema.accounts.email, allEmails))).all().map((a) => a.email.toLowerCase())
+      : [],
+  );
+  for (const [domain, orders] of byDomain) {
+    orders.sort((x, y) => y.createdAt - x.createdAt);
+    const live = orders.filter((o) => o.active);
+    const mine = live.flatMap((o) => o.emails);
+    const status: Domain['status'] =
+      live.length === 0 ? 'purchased' : live.some((o) => o.emails.length === 0) ? 'ordered' : mine.every((e) => connectedEmails.has(e.email.toLowerCase())) ? 'connected' : 'provisioned';
+    const orderId = (live[0] ?? orders[0])!.orderId;
+    const row = db.select().from(schema.domains).where(and(eq(schema.domains.orgId, orgId), eq(schema.domains.domain, domain))).get();
+    if (row) {
+      // Never regress a connected domain because the provider list lags.
+      if (row.status === 'connected' && (status === 'provisioned' || (status === 'ordered' && row.orderId === orderId))) continue;
+      db.update(schema.domains).set({ status, orderId, updatedAt: now }).where(eq(schema.domains.id, row.id)).run();
+    } else {
+      upsertDomain(orgId, domain, { registrar: 'other', status, orderId });
     }
   }
   return { orders: remote.length, delivered };
+}
+
+function isCancelled(orderStatus: string | undefined, subscriptionStatus: string | undefined): boolean {
+  return /cancel/i.test(orderStatus ?? '') || /cancel/i.test(subscriptionStatus ?? '');
+}
+
+function toOrderSubscription(sub: PiSubscription): OrderSubscription {
+  const date = (v: unknown): string | null => {
+    if (!v) return null;
+    const t = typeof v === 'string' || typeof v === 'number' ? new Date(v) : null;
+    return t && !Number.isNaN(t.getTime()) ? t.toISOString() : null;
+  };
+  return { id: sub._id, status: sub.status, priceCents: sub.price, nextBillingDate: date(sub.nextBillingDate), cancelledAt: date(sub.cancelled?.date) };
+}
+
+/** The subscription billing an order, read fresh from the provisioner. */
+async function subscriptionOf(orgId: string, order: ProviderOrder): Promise<OrderSubscription> {
+  const known = orderResult(order)?.subscription;
+  if (known) return known;
+  const subs = await clients.premiuminboxes(orgId).subscriptions();
+  const sub = subs.find((s) => (s.orders ?? []).some((o) => (typeof o === 'string' ? o : o?._id) === order.externalId));
+  if (!sub) throw new Error('Premium Inboxes has no subscription for this order');
+  return toOrderSubscription(sub);
+}
+
+function orderOf(orgId: string, orderId: string): ProviderOrder {
+  const order = db.select().from(schema.providerOrders).where(and(eq(schema.providerOrders.id, orderId), eq(schema.providerOrders.orgId, orgId))).get();
+  if (!order) throw new Error('Unknown order');
+  return order;
+}
+
+/** Cancel the subscription behind an order at the provisioner. Without
+ *  removeImmediately the mailboxes keep working until the paid period ends. */
+export async function cancelOrder(orgId: string, orderId: string, opts: { reason?: string; removeImmediately?: boolean } = {}): Promise<ProviderOrder> {
+  const order = orderOf(orgId, orderId);
+  const sub = await subscriptionOf(orgId, order);
+  const reason = opts.reason?.trim() || 'Cancelled from the OutreachEmailMCP domains page';
+  try {
+    await clients.premiuminboxes(orgId).cancelSubscription(sub.id, { reason, removeImmediately: !!opts.removeImmediately });
+  } catch (err) {
+    logActivity({ category: 'domains', action: 'cancel', status: 'failed', orgId, detail: order.externalId ?? order.id, error: String(err).slice(0, 300) });
+    throw err;
+  }
+  logActivity({ category: 'domains', action: 'cancel', status: 'ok', orgId, detail: `${order.externalId}: subscription ${sub.id}${opts.removeImmediately ? ', mailboxes removed now' : ''}` });
+  await syncOrders(orgId).catch((err) => logger.warn({ orgId, err: String(err) }, 'order sync after cancel failed'));
+  return orderOf(orgId, orderId);
+}
+
+export async function reactivateOrder(orgId: string, orderId: string): Promise<ProviderOrder> {
+  const order = orderOf(orgId, orderId);
+  const sub = await subscriptionOf(orgId, order);
+  try {
+    await clients.premiuminboxes(orgId).reactivateSubscription(sub.id);
+  } catch (err) {
+    logActivity({ category: 'domains', action: 'reactivate', status: 'failed', orgId, detail: order.externalId ?? order.id, error: String(err).slice(0, 300) });
+    throw err;
+  }
+  logActivity({ category: 'domains', action: 'reactivate', status: 'ok', orgId, detail: `${order.externalId}: subscription ${sub.id}` });
+  await syncOrders(orgId).catch((err) => logger.warn({ orgId, err: String(err) }, 'order sync after reactivate failed'));
+  return orderOf(orgId, orderId);
 }
 
 const registrarSyncedAt = new Map<string, number>();
@@ -589,6 +693,7 @@ export function domainsOverview(orgId: string): { domains: DomainRow[]; orders: 
     const result = orderResult(o);
     const emails = result?.emails ?? [];
     for (const e of emails) {
+      if (/cancel/i.test(e.status ?? '')) continue;
       const d = e.email.split('@')[1]?.toLowerCase() ?? '';
       deliveredByDomain.set(d, (deliveredByDomain.get(d) ?? 0) + 1);
     }

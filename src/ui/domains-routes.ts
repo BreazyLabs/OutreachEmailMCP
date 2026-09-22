@@ -14,6 +14,8 @@ import {
   adoptConnectedDomains,
   placeOrder,
   syncOrders,
+  cancelOrder,
+  reactivateOrder,
   domainsOverview,
   orderMailboxes,
   generateMailboxPassword,
@@ -278,6 +280,29 @@ export function registerDomainsUiRoutes(app: FastifyInstance): void {
       return reply.redirect(back('notice', `${r.orders} order${r.orders === 1 ? '' : 's'} checked, ${r.delivered} with mailboxes delivered.`));
     } catch (err) {
       return reply.redirect(back('error', `Sync failed: ${String(err).slice(0, 300)}`));
+    }
+  });
+
+  app.post<{ Params: { id: string }; Body: Body }>('/ui/domains/orders/:id/cancel', async (req, reply) => {
+    const session = guardPost(req, reply);
+    if (!session) return;
+    const now = !!req.body?.removeImmediately;
+    try {
+      const order = await cancelOrder(session.org.id, req.params.id, { reason: str(req.body?.reason), removeImmediately: now });
+      return reply.redirect(back('notice', `Subscription for order ${order.externalId ?? order.id} cancelled at Premium Inboxes${now ? '; the mailboxes are removed now' : '; the mailboxes keep working until the paid period ends'}.`));
+    } catch (err) {
+      return reply.redirect(back('error', `Cancel failed: ${String(err).slice(0, 300)}`));
+    }
+  });
+
+  app.post<{ Params: { id: string } }>('/ui/domains/orders/:id/reactivate', async (req, reply) => {
+    const session = guardPost(req, reply);
+    if (!session) return;
+    try {
+      const order = await reactivateOrder(session.org.id, req.params.id);
+      return reply.redirect(back('notice', `Subscription for order ${order.externalId ?? order.id} reactivated at Premium Inboxes.`));
+    } catch (err) {
+      return reply.redirect(back('error', `Reactivate failed: ${String(err).slice(0, 300)}`));
     }
   });
 

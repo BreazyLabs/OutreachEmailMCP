@@ -208,6 +208,77 @@ describe('Premium Inboxes client and order flow', () => {
     expect(overview.domains.find((d) => d.domain === 'getbreazy.nl')?.mailboxes).toEqual({ connected: 2, delivered: 2 });
   });
 
+  it('orders more mailboxes on a domain that has some, and cancels or reactivates an order subscription', async () => {
+    const { PremiumInboxesClient } = await import('../domains/premiuminboxes.js');
+    const service = await import('../domains/service.js');
+    const { publicOrder } = await import('../api/domains.js');
+    const { db, schema } = await import('../db/index.js');
+    const { eq, and } = await import('drizzle-orm');
+    const state = { bPlaced: false, bDelivered: false, cancelled: new Set<string>() };
+    const puts: { path: string; body: unknown }[] = [];
+    const order = (id: string, emails: string[]) => ({
+      _id: id, status: state.cancelled.has(id) ? 'Canceled - To Be Removed Soon' : emails.length ? 'Order Done & Delivered' : 'Received & Data Validation',
+      emailProvider: 'Google', domains: ['reorder.nl'], prefixVariants: [], issues: [], inboxes: { total: 1, perDomain: 1 },
+      emails: emails.map((email) => ({ firstName: 'A', lastName: 'B', email, password: 'x', status: 'active' })),
+      createdAt: id === 'ord_a' ? '2026-09-01T10:00:00Z' : '2026-09-20T10:00:00Z', updatedAt: '2026-09-20T10:00:00Z',
+    });
+    const sub = (id: string, orderId: string) => ({ _id: id, status: state.cancelled.has(orderId) ? 'Cancelled' : 'Active', price: 350, discount: 0, items: [{ id: 'i', type: 'plan', quantity: 1, unitPrice: 350, price: 350 }], orders: [{ _id: orderId }], nextBillingDate: '2026-10-19T16:46:41.000Z' });
+    const client = new PremiumInboxesClient('tok', fakeFetch((url, init) => {
+      const path = url.replace('https://api.premiuminboxes.com/api', '');
+      if (path === '/client/purchase') { state.bPlaced = true; return { body: '"ord_b"' }; }
+      if (path === '/client/order') return { body: JSON.stringify({ data: [order('ord_a', ['a@reorder.nl']), ...(state.bPlaced ? [order('ord_b', state.bDelivered ? ['b@reorder.nl'] : [])] : [])] }) };
+      if (path === '/client/subscription') return { body: JSON.stringify({ data: [sub('sub_a', 'ord_a'), sub('sub_b', 'ord_b')] }) };
+      const m = /^\/client\/subscription\/(cancel|reactivate)\/(sub_[ab])$/.exec(path);
+      if (m && init?.method === 'PUT') {
+        puts.push({ path, body: init.body ? JSON.parse(String(init.body)) : null });
+        const orderId = m[2] === 'sub_a' ? 'ord_a' : 'ord_b';
+        if (m[1] === 'cancel') state.cancelled.add(orderId);
+        else state.cancelled.delete(orderId);
+        return { body: 'null' };
+      }
+      return { status: 404, body: '{"message":"nope"}' };
+    }));
+    service.clients.premiuminboxes = () => client;
+    const now = Date.now();
+    db.insert(schema.accounts).values({ id: 'acc-a-reorder', orgId, provider: 'google', email: 'a@reorder.nl', displayName: null, status: 'active', createdAt: now, updatedAt: now }).run();
+    const dom = () => db.select().from(schema.domains).where(and(eq(schema.domains.orgId, orgId), eq(schema.domains.domain, 'reorder.nl'))).get()!;
+    const local = (ext: string) => service.listOrders(orgId).find((o) => o.externalId === ext)!;
+
+    // ord_a exists at the provider with its mailbox connected here.
+    await service.syncOrders(orgId);
+    expect(dom().status).toBe('connected');
+    expect(service.orderResult(local('ord_a'))?.subscription).toEqual({ id: 'sub_a', status: 'Active', priceCents: 350, nextBillingDate: '2026-10-19T16:46:41.000Z', cancelledAt: null });
+
+    // A second order on the same domain: ordered until its mailbox arrives, then provisioned.
+    await service.placeOrder(orgId, { domains: ['reorder.nl'], forwardedDomain: 'breazy.nl', emailProvider: 'google', inboxesPerDomain: 1, prefixVariants: ['first'], personas: [{ domain: 'reorder.nl', firstName: 'B', lastName: 'C' }] });
+    await service.syncOrders(orgId);
+    expect(dom().status).toBe('ordered');
+    expect(dom().orderId).toBe(local('ord_b').id);
+    state.bDelivered = true;
+    await service.syncOrders(orgId);
+    expect(dom().status).toBe('provisioned');
+    expect(service.domainsOverview(orgId).domains.find((d) => d.domain === 'reorder.nl')?.mailboxes).toEqual({ connected: 1, delivered: 2 });
+
+    // Cancel the new order right away: the old order still covers the domain.
+    await service.cancelOrder(orgId, local('ord_b').id, { reason: 'too many', removeImmediately: true });
+    expect(puts).toEqual([{ path: '/client/subscription/cancel/sub_b', body: { reason: 'too many', removeImmediately: true } }]);
+    expect(service.orderResult(local('ord_b'))?.subscription?.status).toBe('Cancelled');
+    expect(dom().status).toBe('connected');
+    expect(dom().orderId).toBe(local('ord_a').id);
+
+    // Cancel the old one too: nothing live is left, so the domain is idle again.
+    await service.cancelOrder(orgId, local('ord_a').id);
+    expect(puts[1]).toEqual({ path: '/client/subscription/cancel/sub_a', body: { reason: 'Cancelled from the OutreachEmailMCP domains page', removeImmediately: false } });
+    expect(dom().status).toBe('purchased');
+
+    await service.reactivateOrder(orgId, local('ord_a').id);
+    expect(puts[2]).toEqual({ path: '/client/subscription/reactivate/sub_a', body: null });
+    expect(dom().status).toBe('connected');
+    const detail = service.orderMailboxes(orgId, local('ord_a').id)!;
+    expect(publicOrder(detail.order, detail.result, new Set()).subscription).toMatchObject({ id: 'sub_a', status: 'Active' });
+    await expect(service.cancelOrder(orgId, 'nope')).rejects.toThrow(/Unknown order/);
+  });
+
   it('turns a 429 into a readable error', async () => {
     const { PremiumInboxesClient, PremiumInboxesError } = await import('../domains/premiuminboxes.js');
     const client = new PremiumInboxesClient('tok', fakeFetch(() => ({ status: 429, body: '{"name":"TooManyRequestsError"}', headers: { 'retry-after': '17' } })));

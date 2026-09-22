@@ -10,6 +10,8 @@ import { z } from 'zod';
 import { orgOf, requireScope } from './plugin.js';
 import {
   adoptConnectedDomains,
+  cancelOrder,
+  reactivateOrder,
   checkDomains,
   clients,
   domainsOverview,
@@ -44,6 +46,8 @@ export interface PublicOrder {
   issues: { reason: string }[];
   inboxes: { total: number; perDomain: number };
   emails: { email: string; firstName: string; lastName: string; status: string; connected: boolean }[];
+  /** The provisioner's subscription billing this order, null until an order sync has seen it. */
+  subscription: { id: string; status: string; priceCents: number; nextBillingDate: string | null; cancelledAt: string | null } | null;
 }
 
 /** An order as the API shows it: the provisioner's status and the delivered
@@ -75,6 +79,7 @@ export function publicOrder(order: ProviderOrder, result: OrderResult | null, co
       status: e.status,
       connected: connected.has(e.email.toLowerCase()),
     })),
+    subscription: result?.subscription ?? null,
   };
 }
 
@@ -163,6 +168,25 @@ const batchSchema = z.object({
   tags: z.array(z.string().max(32)).max(25).optional(),
   profilePictureLink: z.string().url().optional(),
 });
+
+const cancelSchema = z.object({
+  reason: z.string().max(500).optional(),
+  /** Remove the mailboxes now instead of at the end of the paid period. */
+  removeImmediately: z.boolean().optional(),
+});
+
+/** Run a subscription change on one order and answer with the order as it is afterwards. */
+async function orderAction(reply: FastifyReply, orgId: string, orderId: string, run: () => Promise<ProviderOrder>) {
+  if (!orderMailboxes(orgId, orderId)) return reply.code(404).send({ error: 'Unknown order' });
+  if (!getIntegration(orgId, 'premiuminboxes')) return reply.code(409).send({ error: 'Premium Inboxes is not connected for this workspace' });
+  try {
+    await run();
+  } catch (err) {
+    return upstream(reply, err);
+  }
+  const detail = orderMailboxes(orgId, orderId)!;
+  return publicOrder(detail.order, detail.result, new Set(detail.emails.filter((e) => e.connected).map((e) => e.email.toLowerCase())));
+}
 
 const DOMAIN_RE = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i;
 
@@ -279,6 +303,19 @@ export function registerDomainRoutes(app: FastifyInstance): void {
     } catch (err) {
       return upstream(reply, err);
     }
+  });
+
+  app.post<{ Params: { orderId: string } }>('/domains/orders/:orderId/cancel', async (req, reply) => {
+    if (!requireScope(req, reply, 'accounts')) return;
+    const orgId = orgOf(req);
+    const body = cancelSchema.parse(req.body ?? {});
+    return orderAction(reply, orgId, req.params.orderId, () => cancelOrder(orgId, req.params.orderId, body));
+  });
+
+  app.post<{ Params: { orderId: string } }>('/domains/orders/:orderId/reactivate', async (req, reply) => {
+    if (!requireScope(req, reply, 'accounts')) return;
+    const orgId = orgOf(req);
+    return orderAction(reply, orgId, req.params.orderId, () => reactivateOrder(orgId, req.params.orderId));
   });
 
   app.get<{ Params: { orderId: string } }>('/domains/orders/:orderId', async (req, reply) => {

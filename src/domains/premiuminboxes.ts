@@ -90,8 +90,10 @@ export interface PiSubscription {
   price: number;
   discount: number;
   items: { id: string; type: string; quantity: number; unitPrice: number; price: number }[];
-  orders?: unknown[];
+  /** Order ids, or whole orders in the list endpoint. */
+  orders?: (string | { _id?: string })[];
   nextBillingDate?: unknown;
+  cancelled?: { date?: unknown; reason?: string };
 }
 
 export interface PiEmailAccount {
@@ -192,6 +194,16 @@ export class PremiumInboxesClient {
   async emailAccounts(workspaceId?: string | null): Promise<PiEmailAccount[]> {
     const r = await this.call<{ emailAccounts: PiEmailAccount[] }>('GET', '/client/email-account', undefined, { workspaceId });
     return r.emailAccounts ?? [];
+  }
+
+  /** Stop billing an order's subscription. Without removeImmediately the
+   *  mailboxes stay until the paid period ends; with it they are removed now. */
+  async cancelSubscription(subscriptionId: string, opts: { reason: string; removeImmediately: boolean }): Promise<void> {
+    await this.call('PUT', `/client/subscription/cancel/${encodeURIComponent(subscriptionId)}`, { reason: opts.reason, removeImmediately: opts.removeImmediately });
+  }
+
+  async reactivateSubscription(subscriptionId: string): Promise<void> {
+    await this.call('PUT', `/client/subscription/reactivate/${encodeURIComponent(subscriptionId)}`);
   }
 
   async cancelEmails(emails: { orderId: string; email: string; domain: string }[], workspaceId?: string | null): Promise<{ cancelledCount: number; cancelledEmails: string[] }> {
