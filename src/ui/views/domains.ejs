@@ -11,6 +11,12 @@
   const connectedTotal = orders.reduce((n, o) => n + o.connected, 0);
   const idle = domains.filter((d) => d.status === 'purchased');
   const withMailboxes = domains.filter((d) => d.status !== 'purchased');
+  // Domains with mailboxes, grouped by the live order that covers them, newest order first.
+  const byOrder = new Map();
+  for (const d of withMailboxes) { const k = d.order ? d.order.id : ''; if (!byOrder.has(k)) byOrder.set(k, []); byOrder.get(k).push(d); }
+  const orderById = new Map(orders.map((o) => [o.order.id, o]));
+  const orderGroups = [...byOrder.entries()].map(([id, ds]) => ({ id: id || 'none', order: orderById.get(id) || null, domains: ds }))
+    .sort((a, b) => (b.order ? b.order.order.createdAt : 0) - (a.order ? a.order.order.createdAt : 0));
   const subCancelled = (sub) => !!sub && /cancel/i.test(sub.status);
   const subLabel = (sub) => sub ? sub.status + ' · ' + (sub.priceCents / 100).toFixed(2) + ' / 4 wk' : '—';
   const autoRenewOn = domains.filter((d) => d.platform && d.registrar === 'namecheap' && d.registrarInfo.autoRenew);
@@ -90,6 +96,10 @@
   .pic img { width:56px; height:56px; border-radius:50%; object-fit:cover; border:1px solid var(--line); background:var(--bg); }
   .cost td, .cost th { padding:0.35rem 0.5rem; }
   .cost tfoot td { font-weight:700; border-top:2px solid var(--line); }
+  .ordgroups { display:grid; gap:0.35rem; }
+  .ordgroup { border:1px solid var(--line); border-radius:8px; padding:0.35rem 0.6rem; font-size:0.85rem; }
+  .ordgroup .ghead { display:flex; gap:0.4rem; align-items:baseline; flex-wrap:wrap; cursor:pointer; }
+  .ordgroup summary { cursor:pointer; color:var(--muted); margin-top:0.15rem; }
   .picklist { display:grid; grid-template-columns:repeat(auto-fill, minmax(230px, 1fr)); gap:0.15rem 1rem; font-size:0.85rem; }
   .bigbtn { padding:0.7rem 1.2rem; font-size:0.95rem; }
 </style>
@@ -227,10 +237,18 @@
       <div class="picklist"><% for (const d of idle) { %><label><input type="checkbox" name="domains" value="<%= d.domain %>" class="pick" data-price="0" data-owned="1" <%= picked.has(d.domain) ? 'checked' : '' %>> <%= d.domain %></label><% } %></div>
       <% } %>
       <% if (withMailboxes.length) { %>
-      <details style="margin-top:0.8rem" <%= withMailboxes.some((d) => picked.has(d.domain)) ? 'open' : '' %>><summary class="muted" style="cursor:pointer">Domains that already have mailboxes (<%= withMailboxes.length %>): order more on them</summary>
-      <p class="mini" style="margin:0.3rem 0">A new order adds mailboxes next to the ones already there and is billed as its own subscription. Pick addresses that do not exist on the domain yet.</p>
-      <div class="picklist"><% for (const d of withMailboxes) { %><label><input type="checkbox" name="domains" value="<%= d.domain %>" class="pick" data-price="0" data-owned="1" <%= picked.has(d.domain) ? 'checked' : '' %>> <%= d.domain %> <span class="muted">· <%= Math.max(d.mailboxes.delivered, d.mailboxes.connected) %> now</span></label><% } %></div>
-      </details>
+      <p class="muted" style="margin:0.8rem 0 0.3rem">Domains that already have mailboxes, by order. Tick an order to put new mailboxes on its domains; to replace the old ones, cancel that order's subscription afterwards (open the order under <b>Orders</b>).</p>
+      <div class="ordgroups">
+      <% for (const g of orderGroups) { const o = g.order; const sub = o && o.result && o.result.subscription; const on = g.domains.filter((d) => picked.has(d.domain)).length; %>
+      <div class="ordgroup" data-group="<%= g.id %>">
+        <label class="ghead"><input type="checkbox" class="grp" <%= on && on === g.domains.length ? 'checked' : '' %>> <b><%= g.domains.map((d) => d.domain.replace(/\.[a-z]+$/, '')).slice(0, 3).join(', ') %><%= g.domains.length > 3 ? ' +' + (g.domains.length - 3) : '' %></b>
+          <span class="muted">· <%= g.domains.length %> domain<%= g.domains.length === 1 ? '' : 's' %> · <%= g.domains.reduce((n, d) => n + Math.max(d.mailboxes.delivered, d.mailboxes.connected), 0) %> mailboxes<%= o ? ' · order ' + fmtDate(o.order.createdAt) : ' · no order' %><%= sub ? ' · ' + sub.status : '' %></span></label>
+        <details <%= on && on < g.domains.length ? 'open' : '' %>><summary class="mini">pick single domains</summary>
+          <div class="picklist"><% for (const d of g.domains) { %><label><input type="checkbox" name="domains" value="<%= d.domain %>" class="pick" data-price="0" data-owned="1" <%= picked.has(d.domain) ? 'checked' : '' %>> <%= d.domain %> <span class="muted">· <%= Math.max(d.mailboxes.delivered, d.mailboxes.connected) %></span></label><% } %></div>
+        </details>
+      </div>
+      <% } %>
+      </div>
       <% } %>
 
       <h3><span class="n">2</span> Mailboxes</h3>
@@ -283,6 +301,11 @@
   <div class="dlg">
     <header><div><h2>Order <%= o.order.externalId || o.order.id %></h2><div class="who"><%= o.order.status %> · <%= o.order.emailProvider %> · <%= o.domains.join(', ') %><% if (r && r.workspaceName) { %> · workspace <%= r.workspaceName %><% } %></div></div><button type="button" class="x" data-close aria-label="Close">×</button></header>
     <div class="body">
+      <% const topSub = r && r.subscription; %>
+      <div class="row" style="gap:0.5rem; flex-wrap:wrap; margin:0 0 0.8rem">
+        <button type="button" data-reorder="<%= JSON.stringify(o.domains) %>" <%= pi.configured ? '' : 'disabled' %>>Order new mailboxes on these domains</button>
+        <% if (topSub) { %><button type="button" class="secondary" onclick="this.closest('dialog').querySelector('.subsect').scrollIntoView({ behavior: 'smooth' })"><%= subCancelled(topSub) ? 'Subscription cancelled: reactivate' : 'Cancel subscription' %> ↓</button><% } %>
+      </div>
       <% if (r && r.issues.length) { %><div class="note bad"><b>Issues reported:</b> <%= r.issues.map((i) => i.reason).join(' · ') %></div><% } %>
       <% if (emails.length === 0) { %>
         <p class="empty">No mailboxes delivered yet<%= r ? ` (${r.inboxes.total} expected)` : '' %>. Checked every 10 minutes; use <b>Check orders now</b> to look sooner.</p>
@@ -307,7 +330,10 @@
         <% } %>
       <% } %>
       <% const sub = r && r.subscription; %>
-      <h3 class="sect" style="margin-top:1.2rem">Subscription</h3>
+      <h3 class="sect" style="margin-top:1.2rem">New mailboxes on these domains</h3>
+      <p class="muted" style="margin:0 0 0.5rem">Mailboxes named wrong, or need more? Open a new batch with these <%= o.domains.length %> domain<%= o.domains.length === 1 ? '' : 's' %> ticked and set the names and addresses there. To replace the current mailboxes, cancel this order's subscription below once the new order is placed.</p>
+      <button type="button" class="secondary" data-reorder="<%= JSON.stringify(o.domains) %>" <%= pi.configured ? '' : 'disabled' %>>Order new mailboxes on these domains</button>
+      <h3 class="sect subsect" style="margin-top:1.2rem">Subscription</h3>
       <% if (!sub) { %>
         <p class="muted">Not seen yet. It shows up after the next order check; use <b>Check orders now</b> to look sooner.</p>
       <% } else if (subCancelled(sub)) { %>
@@ -469,6 +495,26 @@
     btn.textContent = (on.length - owned ? 'Buy ' + (on.length - owned) + ' domain' + (on.length - owned === 1 ? '' : 's') + ' & order ' : 'Order ') + inboxes + ' mailbox' + (inboxes === 1 ? '' : 'es');
   }
   picks().forEach((c) => c.addEventListener('change', cost));
+  // An order group's checkbox ticks all its domains, and follows them.
+  const syncGroups = () => document.querySelectorAll('.ordgroup').forEach((g) => {
+    const boxes = Array.from(g.querySelectorAll('.pick')), n = boxes.filter((b) => b.checked).length, grp = g.querySelector('.grp');
+    grp.checked = n > 0 && n === boxes.length; grp.indeterminate = n > 0 && n < boxes.length;
+  });
+  document.querySelectorAll('.ordgroup').forEach((g) => {
+    g.querySelector('.grp').addEventListener('change', (e) => { g.querySelectorAll('.pick').forEach((b) => { b.checked = e.target.checked; }); syncGroups(); cost(); });
+    g.querySelectorAll('.pick').forEach((b) => b.addEventListener('change', syncGroups));
+  });
+  // "Order new mailboxes on these domains" in an order: the batch with exactly those ticked.
+  document.querySelectorAll('[data-reorder]').forEach((btn) => btn.addEventListener('click', () => {
+    const want = new Set(JSON.parse(btn.dataset.reorder).map((d) => d.toLowerCase()));
+    picks().forEach((c) => { c.checked = want.has(c.value.toLowerCase()); });
+    syncGroups(); cost(); save();
+    const own = btn.closest('dialog'); if (own) own.close();
+    const dlg = document.getElementById('dlg-batch'); dlg.showModal();
+    const step2 = Array.from(dlg.querySelectorAll('h3')).find((h) => /Mailboxes/.test(h.textContent));
+    const firstTicked = picks().find((c) => c.checked);
+    (firstTicked ? firstTicked.closest('.ordgroup') || firstTicked : step2 || dlg).scrollIntoView({ block: 'center' });
+  }));
   document.getElementById('perDomain').addEventListener('input', cost);
   [first, last].forEach((el) => el.addEventListener('input', previews));
   const tickAll = document.getElementById('tick-all');
@@ -521,7 +567,7 @@
       if (missing.length) { const custom = form.querySelector('[name=custom]'); custom.value = [custom.value, missing.join(', ')].filter(Boolean).join(', '); }
     }
     if (s.pictureUrl) { preview.src = s.pictureUrl; preview.hidden = false; }
-    previews(); cost();
+    syncGroups(); previews(); cost();
   }
   const save = () => { try { localStorage.setItem(DRAFT, JSON.stringify(state())); } catch (e) {} };
   form.addEventListener('input', save);
@@ -544,7 +590,7 @@
   document.getElementById('batch-clear').addEventListener('click', () => {
     if (!confirm('Clear the batch and forget the autosaved draft?')) return;
     try { localStorage.removeItem(DRAFT); } catch (e) {}
-    form.reset(); picks().forEach((c) => { c.checked = false; }); picData.value = ''; preview.hidden = true; previews(); cost();
+    form.reset(); picks().forEach((c) => { c.checked = false; }); picData.value = ''; preview.hidden = true; syncGroups(); previews(); cost();
   });
   // A placed order empties the draft (the page reloads with a notice and no wizard state).
   <% if (notice && /order .* placed/.test(notice)) { %>try { localStorage.removeItem(DRAFT); } catch (e) {}<% } %>
