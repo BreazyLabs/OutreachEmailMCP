@@ -2,8 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { and, desc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { db, schema } from '../db/index.js';
-import { deleteAccountSpoolFiles } from '../queue/sendQueue.js';
-import { purgeAccountTasks } from '../warmup/tasks.js';
+import { deleteAccount } from '../accounts/delete.js';
 import { buildAccountsCsv } from '../export/accounts-csv.js';
 import {
   createConnectHubLink,
@@ -165,10 +164,7 @@ export function registerAccountRoutes(app: FastifyInstance) {
     if (!requireScope(req, reply, 'accounts')) return;
     const account = loadAccount(req.params.accountId, req);
     if (!account) return reply.code(404).send({ error: 'Unknown account' });
-    // Cascades wipe tokens, SMTP credentials, jobs, webhooks, sync state
-    deleteAccountSpoolFiles(account.id);
-    purgeAccountTasks(account.id);
-    db.delete(schema.accounts).where(eq(schema.accounts.id, account.id)).run();
+    deleteAccount(account.id);
     return { deleted: account.id };
   });
 }

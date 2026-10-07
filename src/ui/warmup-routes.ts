@@ -29,6 +29,7 @@ import { refreshDomainHealth } from '../warmup/dns-health.js';
 import { logActivity } from '../observability/activity.js';
 import { orgTagCounts, splitTagInput, setAccountTags } from '../accounts/tags.js';
 import { accountsMissingNames, refreshAccountProfiles } from '../accounts/profile.js';
+import { deleteAccount } from '../accounts/delete.js';
 import { SEQUENCER_LABELS } from '../export/accounts-csv.js';
 import type { SessionContext } from './session.js';
 import type { FastifyReply, FastifyRequest } from 'fastify';
@@ -158,6 +159,11 @@ export function registerWarmupUiRoutes(app: FastifyInstance): void {
       return reply.redirect(back('error', 'Select at least one mailbox first.'));
     }
     const action = String(body.action ?? '');
+    if (action === 'delete') {
+      const owned = accountIds.map((id) => ownedAccount(id, session.org.id)).filter((a) => a !== undefined);
+      for (const account of owned) deleteAccount(account.id);
+      return reply.redirect(back('notice', `${owned.length} mailbox${owned.length === 1 ? '' : 'es'} disconnected.`));
+    }
     if (action === 'refresh_profile') {
       const results = await refreshAccountProfiles(session.org.id, accountIds);
       const ok = results.filter((r) => r.ok && r.names).length;

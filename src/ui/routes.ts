@@ -6,8 +6,7 @@ import { config } from '../config.js';
 import { generateApiKey, randomBase62 } from '../crypto/credentials.js';
 import { decryptSecret, encryptSecret } from '../crypto/secrets.js';
 import { isPrivateWebhookTarget } from '../inbound/webhooks.js';
-import { deleteAccountSpoolFiles } from '../queue/sendQueue.js';
-import { purgeAccountTasks } from '../warmup/tasks.js';
+import { deleteAccount } from '../accounts/delete.js';
 import { createSmtpCredential, smtpAdvertisedHost, advertisedPorts } from '../smtp/credentials.js';
 import { buildAccountsCsv } from '../export/accounts-csv.js';
 import {
@@ -412,9 +411,7 @@ export function registerUiRoutes(app: FastifyInstance) {
         )
         .get();
       if (!account) return reply.code(404).send('Unknown account');
-      deleteAccountSpoolFiles(account.id);
-      purgeAccountTasks(account.id);
-      db.delete(schema.accounts).where(eq(schema.accounts.id, account.id)).run();
+      deleteAccount(account.id);
       return reply.redirect('/ui');
     },
   );
