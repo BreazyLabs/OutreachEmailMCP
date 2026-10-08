@@ -23,8 +23,11 @@ import {
   storeProfilePicture,
   learnInboxPrice,
   clients,
+  reportBrokenMailboxes,
+  orderTicket,
   type Candidate,
 } from '../domains/service.js';
+import { logger } from '../logger.js';
 import { ADDRESS_PATTERNS, localParts } from '../domains/patterns.js';
 import { config } from '../config.js';
 import fs from 'node:fs';
@@ -33,7 +36,7 @@ import { getIntegration, getIntegrationRow, setIntegration, markIntegration, del
 import { DEFAULT_TLDS, parseDomainList } from '../domains/names.js';
 import { splitTagInput } from '../accounts/tags.js';
 import { NamecheapClient, type NamecheapConfig } from '../domains/namecheap.js';
-import { PremiumInboxesClient } from '../domains/premiuminboxes.js';
+import { PremiumInboxesClient, PremiumInboxesPortal } from '../domains/premiuminboxes.js';
 import type { SessionContext } from './session.js';
 import type { FastifyRequest } from 'fastify';
 
@@ -57,12 +60,13 @@ function pageLocals(req: FastifyRequest, session: SessionContext, extra: Record<
     panel: (req.query as { panel?: string }).panel ?? '',
     ...overview,
     orderMailboxesById,
+    orderTicketsById: Object.fromEntries(overview.orders.map((o) => [o.order.id, orderTicket(o.order)])),
     integrations: {
       namecheap: nc
         ? { configured: true, verifiedAt: ncRow?.verifiedAt ?? null, lastError: ncRow?.lastError ?? null, apiUser: nc.apiUser, username: nc.username, clientIp: nc.clientIp, sandbox: !!nc.sandbox, apiKeyMasked: mask(nc.apiKey), contact: nc.contact }
         : { configured: false, verifiedAt: null, lastError: null, apiUser: '', username: '', clientIp: '', sandbox: false, apiKeyMasked: '', contact: null },
       premiuminboxes: pi
-        ? { configured: true, verifiedAt: piRow?.verifiedAt ?? null, lastError: piRow?.lastError ?? null, tokenMasked: mask(pi.apiToken), workspaceId: pi.workspaceId, knownWorkspaces: pi.knownWorkspaces ?? [], hosting: { ...pi.hosting, password: mask(pi.hosting.password), namecheapBackupCodes: pi.hosting.namecheapBackupCodes ? '(set)' : '' }, defaults: pi.defaults }
+        ? { configured: true, verifiedAt: piRow?.verifiedAt ?? null, lastError: piRow?.lastError ?? null, tokenMasked: mask(pi.apiToken), portalEmail: pi.portalEmail ?? '', portalPasswordSet: !!pi.portalPassword, workspaceId: pi.workspaceId, knownWorkspaces: pi.knownWorkspaces ?? [], hosting: { ...pi.hosting, password: mask(pi.hosting.password), namecheapBackupCodes: pi.hosting.namecheapBackupCodes ? '(set)' : '' }, defaults: pi.defaults }
         : { configured: false, verifiedAt: null, lastError: null, tokenMasked: '', workspaceId: null, knownWorkspaces: [], hosting: { platform: 'Namecheap', username: '', password: '', namecheapBackupCodes: '' }, defaults: { emailProvider: 'Google', inboxesPerDomain: 2, prefixVariants: ['first', 'first.last'], insured: false } },
     },
     defaultTlds: DEFAULT_TLDS,
@@ -380,6 +384,9 @@ export function registerDomainsUiRoutes(app: FastifyInstance): void {
     }
     const cfg: PremiumInboxesConfig = {
       apiToken: str(body.apiToken) || current?.apiToken || '',
+      // A blank email turns ticketing off; a blank password keeps the saved one.
+      portalEmail: str(body.portalEmail) || undefined,
+      portalPassword: str(body.portalEmail) ? str(body.portalPassword) || current?.portalPassword || undefined : undefined,
       workspaceId: str(body.workspaceId) || null,
       knownWorkspaces: current?.knownWorkspaces ?? [],
       hosting: {
@@ -407,7 +414,20 @@ export function registerDomainsUiRoutes(app: FastifyInstance): void {
       cfg.workspaceName = workspaces.find((w) => w.id === cfg.workspaceId)?.name ?? null;
       setIntegration(session.org.id, 'premiuminboxes', cfg);
       markIntegration(session.org.id, 'premiuminboxes', { ok: true });
-      return reply.redirect(back('notice', `Premium Inboxes connected: ${workspaces.length} workspace${workspaces.length === 1 ? '' : 's'} visible.`, 'integrations'));
+      let tickets = '';
+      if (cfg.portalEmail && cfg.portalPassword) {
+        try {
+          await new PremiumInboxesPortal(cfg.portalEmail, cfg.portalPassword).login();
+        } catch (err) {
+          return reply.redirect(back('error', `Saved, but the portal login failed, so no tickets can be opened: ${String(err).slice(0, 300)}`, 'integrations'));
+        }
+        const opened = await reportBrokenMailboxes(session.org.id).catch((err) => {
+          logger.warn({ orgId: session.org.id, err: String(err) }, 'broken mailbox report failed');
+          return -1;
+        });
+        tickets = opened < 0 ? ' Portal login works, but opening a ticket failed; see the activity log.' : ` Portal login works${opened ? `; opened ${opened} ticket${opened === 1 ? '' : 's'} for broken mailboxes` : ''}.`;
+      }
+      return reply.redirect(back('notice', `Premium Inboxes connected: ${workspaces.length} workspace${workspaces.length === 1 ? '' : 's'} visible.${tickets}`, 'integrations'));
     } catch (err) {
       setIntegration(session.org.id, 'premiuminboxes', cfg);
       markIntegration(session.org.id, 'premiuminboxes', { ok: false, error: String(err) });

@@ -627,6 +627,8 @@ export const providerOrders = sqliteTable('provider_orders', {
   /** The partner's latest view of the order: issues, delivered mailboxes (encrypted: it carries passwords). */
   resultEnc: text('result_enc'),
   lastError: text('last_error'),
+  /** The last ticket opened for its broken mailboxes: { ticketId, emails, openedAt }. */
+  ticketJson: text('ticket_json'),
   lastCheckedAt: integer('last_checked_at'),
   deliveredAt: integer('delivered_at'),
   createdAt: integer('created_at').notNull(),

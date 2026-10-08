@@ -21,6 +21,9 @@ export interface PremiumInboxesConfig {
   knownWorkspaces?: { id: string; name: string }[];
   /** How Premium Inboxes gets into DNS for the domains: registrar or DNS host login. */
   hosting: PiHosting;
+  /** Portal login, only for opening tickets: the API token cannot. */
+  portalEmail?: string;
+  portalPassword?: string;
   /** Cents per inbox per 4 weeks, learned from the subscriptions (350 = $3.50). */
   pricePerInboxCents?: number;
   defaults: {

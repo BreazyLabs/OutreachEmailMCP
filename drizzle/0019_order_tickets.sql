@@ -1,0 +1,1 @@
+ALTER TABLE `provider_orders` ADD `ticket_json` text;

@@ -20,10 +20,12 @@ import {
   importRegistrarDomains,
   orderMailboxes,
   orderResult,
+  orderTicket,
   runBatch,
   syncOrders,
   type DomainRow,
   type OrderResult,
+  type OrderTicket,
 } from '../domains/service.js';
 import { getIntegration, getIntegrationRow, integrationSource } from '../domains/integrations.js';
 import { ADDRESS_PATTERNS, localParts } from '../domains/patterns.js';
@@ -48,6 +50,8 @@ export interface PublicOrder {
   emails: { email: string; firstName: string; lastName: string; status: string; connected: boolean }[];
   /** The provisioner's subscription billing this order, null until an order sync has seen it. */
   subscription: { id: string; status: string; priceCents: number; nextBillingDate: string | null; cancelledAt: string | null } | null;
+  /** The last ticket opened at the provisioner for this order's broken mailboxes; emails are those still broken. */
+  ticket: OrderTicket | null;
 }
 
 /** An order as the API shows it: the provisioner's status and the delivered
@@ -80,6 +84,7 @@ export function publicOrder(order: ProviderOrder, result: OrderResult | null, co
       connected: connected.has(e.email.toLowerCase()),
     })),
     subscription: result?.subscription ?? null,
+    ticket: orderTicket(order),
   };
 }
 
@@ -138,6 +143,8 @@ function integrationsView(orgId: string) {
       workspaceName: pi?.workspaceName ?? null,
       defaults: pi?.defaults ?? null,
       pricePerInboxCents: pi?.pricePerInboxCents ?? 350,
+      /** Broken mailboxes are reported as tickets (a portal login is saved). */
+      tickets: !!(pi?.portalEmail && pi.portalPassword),
     },
   };
 }

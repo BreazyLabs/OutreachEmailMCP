@@ -14,7 +14,7 @@ import { createConnectHubLink } from '../auth/connect-links.js';
 import { domainHealthFor, dnsVerdict, issuesOf } from '../warmup/dns-health.js';
 import { parseTags } from '../accounts/tags.js';
 import { NamecheapClient, type Availability, type TldPrice } from './namecheap.js';
-import { PremiumInboxesClient, PI_SEQUENCER_OTHER, type PiOrder, type PiPurchase, type PiDeliveredEmail, type PiSubscription } from './premiuminboxes.js';
+import { PremiumInboxesClient, PremiumInboxesPortal, PI_SEQUENCER_OTHER, PI_TICKET_DISCONNECTED, type PiOrder, type PiPurchase, type PiDeliveredEmail, type PiSubscription } from './premiuminboxes.js';
 import { getIntegration, setIntegration, markIntegration, orgsWithIntegration } from './integrations.js';
 import { suggestDomains, splitDomain, type Suggestion } from './names.js';
 import { localParts } from './patterns.js';
@@ -35,6 +35,12 @@ export const clients = {
     const cfg = getIntegration(orgId, 'premiuminboxes');
     if (!cfg) throw new Error('Premium Inboxes is not connected for this workspace');
     return new PremiumInboxesClient(cfg.apiToken);
+  },
+  /** Null when no portal login is saved, so no tickets are opened. */
+  premiuminboxesPortal: (orgId: string): PremiumInboxesPortal | null => {
+    const cfg = getIntegration(orgId, 'premiuminboxes');
+    if (!cfg?.portalEmail || !cfg.portalPassword) return null;
+    return new PremiumInboxesPortal(cfg.portalEmail, cfg.portalPassword);
   },
 };
 
@@ -235,6 +241,7 @@ export interface OrderResult {
   inboxes: { total: number; perDomain: number };
   updatedAt: string;
   workspaceName?: string;
+  workspaceId?: string;
   /** The subscription billing this order, when the provisioner listed it. */
   subscription?: OrderSubscription;
 }
@@ -495,6 +502,7 @@ export async function syncOrders(orgId: string): Promise<{ orders: number; deliv
       inboxes: r.inboxes ?? { total: 0, perDomain: 0 },
       updatedAt: r.updatedAt,
       workspaceName: r.workspaceName,
+      workspaceId: r.workspaceId,
       ...(subscription ? { subscription } : {}),
     };
     const patch = {
@@ -624,6 +632,85 @@ export async function reactivateOrder(orgId: string, orderId: string): Promise<P
   return orderOf(orgId, orderId);
 }
 
+export interface OrderTicket {
+  ticketId: string | null;
+  /** The mailboxes the ticket named that are still broken here. */
+  emails: string[];
+  openedAt: number;
+}
+
+export function orderTicket(order: Pick<ProviderOrder, 'ticketJson'>): OrderTicket | null {
+  if (!order.ticketJson) return null;
+  try {
+    return JSON.parse(order.ticketJson) as OrderTicket;
+  } catch {
+    return null;
+  }
+}
+
+function brokenReason(a: { status: string; lastError: string | null }): string {
+  const why = a.status === 'auth_error' ? 'sign-in stopped working' : 'no mailbox behind the account (unlicensed or mail not enabled)';
+  return a.lastError && a.status === 'auth_error' ? `${why}: ${a.lastError.slice(0, 160)}` : why;
+}
+
+/** Mailboxes an order delivered that went to auth_error or disabled here are
+ *  reported to Premium Inboxes: one ticket per order naming all of them. A new
+ *  ticket only goes out when a mailbox breaks that the last one did not name;
+ *  a mailbox that recovers is forgotten, so breaking again reports it again.
+ *  Needs the portal login; returns how many tickets were opened. */
+export async function reportBrokenMailboxes(orgId: string): Promise<number> {
+  const portal = clients.premiuminboxesPortal(orgId);
+  if (!portal) return 0;
+  const broken = new Map(
+    db
+      .select({ email: schema.accounts.email, status: schema.accounts.status, lastError: schema.accounts.lastError })
+      .from(schema.accounts)
+      .where(and(eq(schema.accounts.orgId, orgId), inArray(schema.accounts.status, ['auth_error', 'disabled'])))
+      .all()
+      .map((a) => [a.email.toLowerCase(), a]),
+  );
+  let opened = 0;
+  let failure: unknown = null;
+  let selfWorkspace: string | null | undefined;
+  for (const order of listOrders(orgId)) {
+    const result = orderResult(order);
+    const prev = orderTicket(order);
+    if (!result || isCancelled(result.status, result.subscription?.status)) continue;
+    const delivered = result.emails.filter((e) => !/cancel/i.test(e.status ?? '')).map((e) => e.email.toLowerCase());
+    const brokenHere = delivered.filter((e) => broken.has(e));
+    const fresh = brokenHere.filter((e) => !prev?.emails.includes(e));
+    if (fresh.length === 0) {
+      const still = (prev?.emails ?? []).filter((e) => brokenHere.includes(e));
+      if (prev && still.length !== prev.emails.length) {
+        db.update(schema.providerOrders).set({ ticketJson: JSON.stringify({ ...prev, emails: still }) }).where(eq(schema.providerOrders.id, order.id)).run();
+      }
+      continue;
+    }
+    const notes = [
+      `These mailboxes from order ${order.externalId} stopped working on our side:`,
+      '',
+      ...brokenHere.map((e) => `- ${e}: ${brokenReason(broken.get(e)!)}`),
+      '',
+      'Please check them and restore access (or replace them). This ticket was opened automatically by our email gateway.',
+    ].join('\n');
+    try {
+      let workspaceId = result.workspaceId ?? null;
+      if (!workspaceId) workspaceId = selfWorkspace === undefined ? (selfWorkspace = await portal.selfWorkspaceId()) : selfWorkspace;
+      const ticketId = await portal.createTicket({ type: PI_TICKET_DISCONNECTED, order: order.externalId, emailAccounts: brokenHere, notes }, workspaceId);
+      const ticket: OrderTicket = { ticketId, emails: brokenHere, openedAt: Date.now() };
+      db.update(schema.providerOrders).set({ ticketJson: JSON.stringify(ticket) }).where(eq(schema.providerOrders.id, order.id)).run();
+      logActivity({ category: 'domains', action: 'ticket', status: 'ok', orgId, detail: `${order.externalId}: ${brokenHere.join(', ')}` });
+      opened++;
+    } catch (err) {
+      logActivity({ category: 'domains', action: 'ticket', status: 'failed', orgId, detail: `${order.externalId}: ${brokenHere.join(', ')}`, error: String(err).slice(0, 300) });
+      markIntegration(orgId, 'premiuminboxes', { ok: false, error: `Could not open a ticket: ${String(err).slice(0, 300)}` });
+      failure ??= err;
+    }
+  }
+  if (failure) throw failure;
+  return opened;
+}
+
 const registrarSyncedAt = new Map<string, number>();
 
 /** Workspaces whose orders must be mirrored: those with their own provisioner
@@ -640,6 +727,11 @@ export async function syncAllOrders(): Promise<void> {
       await syncOrders(orgId);
     } catch (err) {
       logger.warn({ orgId, err: String(err) }, 'order sync failed');
+    }
+    try {
+      await reportBrokenMailboxes(orgId);
+    } catch (err) {
+      logger.warn({ orgId, err: String(err) }, 'broken mailbox report failed');
     }
   }
   // Expiry and auto-renew flags from the registrar, once a day per workspace.

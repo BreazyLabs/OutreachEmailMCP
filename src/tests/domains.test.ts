@@ -279,6 +279,88 @@ describe('Premium Inboxes client and order flow', () => {
     await expect(service.cancelOrder(orgId, 'nope')).rejects.toThrow(/Unknown order/);
   });
 
+  it('opens one portal ticket per order for its broken mailboxes, and only again when another one breaks', async () => {
+    const { PremiumInboxesClient, PremiumInboxesPortal } = await import('../domains/premiuminboxes.js');
+    const service = await import('../domains/service.js');
+    const { db, schema } = await import('../db/index.js');
+    const { eq } = await import('drizzle-orm');
+    const emails = ['t1@ticket.nl', 't2@ticket.nl', 't3@ticket.nl'];
+    const client = new PremiumInboxesClient('tok', fakeFetch((url) => {
+      const path = url.replace('https://api.premiuminboxes.com/api', '');
+      if (path === '/client/order') return { body: JSON.stringify({ data: [{ _id: 'ord_t', status: 'Order Done & Delivered', emailProvider: 'Google', domains: ['ticket.nl'], prefixVariants: [], issues: [], inboxes: { total: 3, perDomain: 3 }, workspaceId: 'ws_t', emails: emails.map((email) => ({ firstName: 'A', lastName: 'B', email, password: 'x', status: 'active' })), createdAt: '2026-09-01T10:00:00Z', updatedAt: '2026-09-01T10:00:00Z' }] }) };
+      if (path === '/client/subscription') return { body: '{"data":[]}' };
+      return { status: 404, body: '{"message":"nope"}' };
+    }));
+    let logins = 0;
+    let expireNext = false;
+    const tickets: { headers: Record<string, string>; body: { type: string; order: string; emailAccounts: string[]; notes: string } }[] = [];
+    const portal = new PremiumInboxesPortal('me@agency.test', 'secret', fakeFetch((url, init) => {
+      const path = url.replace('https://api.premiuminboxes.com/api', '');
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      if (path === '/web/auth/login') {
+        expect(JSON.parse(String(init?.body))).toEqual({ email: 'me@agency.test', password: 'secret' });
+        logins++;
+        return { body: JSON.stringify({ token: `jwt${logins}`, refreshToken: 'r' }) };
+      }
+      if (path === '/web/ticket' && init?.method === 'POST') {
+        if (expireNext) { expireNext = false; return { status: 401, body: '{"name":"UnauthorizedError","message":"Token expired or invalid"}' }; }
+        tickets.push({ headers, body: JSON.parse(String(init.body)) });
+        return { body: JSON.stringify({ _id: `tk${tickets.length}` }) };
+      }
+      return { status: 404, body: '{"message":"nope"}' };
+    }));
+    service.clients.premiuminboxes = () => client;
+    service.clients.premiuminboxesPortal = () => portal;
+    const now = Date.now();
+    for (const email of emails) db.insert(schema.accounts).values({ id: 'acc-' + email, orgId, provider: 'google', email, displayName: null, status: 'active', createdAt: now, updatedAt: now }).run();
+    const setStatus = (email: string, status: 'active' | 'auth_error' | 'disabled', lastError: string | null = null) =>
+      db.update(schema.accounts).set({ status, lastError }).where(eq(schema.accounts.email, email)).run();
+    const order = () => service.listOrders(orgId).find((o) => o.externalId === 'ord_t')!;
+    await service.syncOrders(orgId);
+
+    // Nothing broken: no login, no ticket.
+    expect(await service.reportBrokenMailboxes(orgId)).toBe(0);
+    expect(logins).toBe(0);
+
+    // Two break: one ticket naming both, in the order's workspace.
+    setStatus('t1@ticket.nl', 'auth_error', 'invalid_grant: Bad Request');
+    setStatus('t2@ticket.nl', 'disabled', 'No mailbox behind this account');
+    expect(await service.reportBrokenMailboxes(orgId)).toBe(1);
+    expect(tickets).toHaveLength(1);
+    expect(tickets[0]!.headers).toMatchObject({ Authorization: 'Bearer jwt1', 'X-Workspace-Id': 'ws_t' });
+    expect(tickets[0]!.body).toMatchObject({ type: 'Disconnected Email Accounts', order: 'ord_t', emailAccounts: ['t1@ticket.nl', 't2@ticket.nl'] });
+    expect(tickets[0]!.body.notes).toContain('t1@ticket.nl: sign-in stopped working: invalid_grant');
+    expect(tickets[0]!.body.notes).toContain('t2@ticket.nl: no mailbox behind the account');
+    expect(service.orderTicket(order())).toMatchObject({ ticketId: 'tk1', emails: ['t1@ticket.nl', 't2@ticket.nl'] });
+
+    // Same breakage on the next pass: nothing new.
+    expect(await service.reportBrokenMailboxes(orgId)).toBe(0);
+    expect(tickets).toHaveLength(1);
+
+    // One recovers: forgotten. Another breaks while the session has expired: re-login, a new ticket with all broken ones.
+    setStatus('t1@ticket.nl', 'active');
+    expect(await service.reportBrokenMailboxes(orgId)).toBe(0);
+    expect(service.orderTicket(order())?.emails).toEqual(['t2@ticket.nl']);
+    setStatus('t3@ticket.nl', 'auth_error');
+    expireNext = true;
+    expect(await service.reportBrokenMailboxes(orgId)).toBe(1);
+    expect(logins).toBe(2);
+    expect(tickets[1]!.headers.Authorization).toBe('Bearer jwt2');
+    expect(tickets[1]!.body.emailAccounts).toEqual(['t2@ticket.nl', 't3@ticket.nl']);
+
+    // The first one breaking again is news.
+    setStatus('t1@ticket.nl', 'auth_error');
+    expect(await service.reportBrokenMailboxes(orgId)).toBe(1);
+    expect(tickets[2]!.body.emailAccounts).toEqual(emails);
+
+    // No portal login saved: nothing is reported.
+    service.clients.premiuminboxesPortal = () => null;
+    db.update(schema.providerOrders).set({ ticketJson: null }).where(eq(schema.providerOrders.id, order().id)).run();
+    expect(await service.reportBrokenMailboxes(orgId)).toBe(0);
+    expect(tickets).toHaveLength(3);
+    for (const email of emails) setStatus(email, 'active');
+  });
+
   it('turns a 429 into a readable error', async () => {
     const { PremiumInboxesClient, PremiumInboxesError } = await import('../domains/premiuminboxes.js');
     const client = new PremiumInboxesClient('tok', fakeFetch(() => ({ status: 429, body: '{"name":"TooManyRequestsError"}', headers: { 'retry-after': '17' } })));

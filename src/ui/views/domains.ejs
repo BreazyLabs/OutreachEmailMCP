@@ -306,6 +306,7 @@
         <button type="button" data-reorder="<%= JSON.stringify(o.domains) %>" <%= pi.configured ? '' : 'disabled' %>>Order new mailboxes on these domains</button>
         <% if (topSub) { %><button type="button" class="secondary" onclick="this.closest('dialog').querySelector('.subsect').scrollIntoView({ behavior: 'smooth' })"><%= subCancelled(topSub) ? 'Subscription cancelled: reactivate' : 'Cancel subscription' %> ↓</button><% } %>
       </div>
+      <% const tk = orderTicketsById[o.order.id]; if (tk && tk.emails.length) { %><div class="note info"><b>Ticket opened</b> <%= fmtWhen(tk.openedAt) %><%= tk.ticketId ? ' (#' + tk.ticketId + ')' : '' %> at Premium Inboxes for <%= tk.emails.join(', ') %>. A new one goes out only when another mailbox on this order breaks.</div><% } %>
       <% if (r && r.issues.length) { %><div class="note bad"><b>Issues reported:</b> <%= r.issues.map((i) => i.reason).join(' · ') %></div><% } %>
       <% if (emails.length === 0) { %>
         <p class="empty">No mailboxes delivered yet<%= r ? ` (${r.inboxes.total} expected)` : '' %>. Checked every 10 minutes; use <b>Check orders now</b> to look sooner.</p>
@@ -399,9 +400,11 @@
       <% if (pi.lastError) { %><div class="note bad"><%= pi.lastError %></div><% } %>
       <form method="post" action="/ui/integrations/premiuminboxes">
         <input type="hidden" name="_csrf" value="<%= csrf %>">
-        <p class="muted" style="margin:0 0 0.6rem">Generate the token in the Premium Inboxes portal under Settings → API Token. The hosting login is what their team uses to set the domains' DNS. Leave it blank when they already have your access on file; the order then says so.</p>
+        <p class="muted" style="margin:0 0 0.6rem">Generate the token in the Premium Inboxes portal under Settings → API Token. The hosting login is what their team uses to set the domains' DNS. Leave it blank when they already have your access on file; the order then says so. With the portal login filled in, a mailbox from an order that loses its sign-in or its mailbox here gets reported automatically: one ticket per order, naming every broken mailbox on it. The API token cannot open tickets, so this signs in to the portal as you. Leave the email blank to turn it off.</p>
         <div class="grid2">
           <div class="field"><label>API token <%= pi.configured ? '(leave blank to keep ' + pi.tokenMasked + ')' : '' %></label><input name="apiToken" placeholder="<%= pi.configured ? pi.tokenMasked : '' %>" autocomplete="off"></div>
+          <div class="field"><label>Portal email (for tickets)</label><input name="portalEmail" value="<%= pi.portalEmail || '' %>" autocomplete="off" placeholder="optional"></div>
+          <div class="field"><label>Portal password <%= pi.portalPasswordSet ? '(set; leave blank to keep)' : '' %></label><input name="portalPassword" type="password" autocomplete="new-password" placeholder="<%= pi.portalPasswordSet ? '••••••••' : '' %>"></div>
           <div class="field"><label>Workspace for orders</label>
             <% if (pi.knownWorkspaces.length) { %><select name="workspaceId"><option value="">Agency default</option><% for (const w of pi.knownWorkspaces) { %><option value="<%= w.id %>" <%= pi.workspaceId === w.id ? 'selected' : '' %>><%= w.name %></option><% } %></select>
             <% } else { %><input name="workspaceId" value="<%= pi.workspaceId || '' %>" placeholder="optional; the list appears after the first save"><% } %>
