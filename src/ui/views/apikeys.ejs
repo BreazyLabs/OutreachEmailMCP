@@ -1,39 +1,48 @@
 <%- include('_header') %>
-<h1>API keys</h1>
+<div class="pagehead">
+  <div>
+    <h1>API keys</h1>
+    <p class="sub">Keys for the REST API and the MCP endpoint. Each key only gets the permissions you tick.</p>
+  </div>
+</div>
 <% if (newKey) { %>
-<div class="alert success">Key "<%= newKey.name %>" created — copy it now, it is shown only once.</div>
-<div class="card"><div class="secret mono"><%= newKey.key %></div></div>
+<div class="card" style="border-color:color-mix(in srgb, var(--ok) 40%, var(--line))">
+  <div class="card-head"><h3>Key "<%= newKey.name %>" created</h3><span class="muted">Copy it now; it is shown only once.</span></div>
+  <div class="secret mono"><%= newKey.key %></div>
+</div>
 <% } %>
 <div class="card">
+  <div class="card-head"><h3>New key</h3></div>
   <form method="post" action="/ui/apikeys">
     <input type="hidden" name="_csrf" value="<%= csrf %>">
-    <div class="row" style="margin-bottom:0.7rem">
-      <input name="name" placeholder="Key name (e.g. crm-integration)" style="flex:1">
+    <div class="row" style="margin-bottom:0.8rem">
+      <input name="name" placeholder="Key name (e.g. crm-integration)" style="flex:1; min-width:220px" aria-label="Key name">
       <button type="submit">Create API key</button>
     </div>
-    <div class="row muted" style="gap:1rem">
-      Permissions:
-      <label><input type="checkbox" name="scopes" value="send" checked> send</label>
-      <label><input type="checkbox" name="scopes" value="read" checked> read</label>
-      <label><input type="checkbox" name="scopes" value="accounts" checked> accounts</label>
-      <label><input type="checkbox" name="scopes" value="webhooks" checked> webhooks</label>
-      <label><input type="checkbox" name="scopes" value="export" checked> export</label>
+    <div class="row" style="gap:0.45rem">
+      <span class="muted" style="margin-right:0.3rem">Permissions</span>
+      <% for (const s of ['send', 'read', 'accounts', 'webhooks', 'export']) { %>
+      <label class="perm"><input type="checkbox" name="scopes" value="<%= s %>" checked> <%= s %></label>
+      <% } %>
     </div>
   </form>
 </div>
-<div class="card">
+<div class="card flush">
+  <div class="card-head"><h3>Active keys</h3></div>
   <% const activeKeys = keys.filter(k => !k.revokedAt); %>
-  <% if (activeKeys.length === 0) { %><p class="muted">No API keys yet.</p><% } else { %>
+  <% if (activeKeys.length === 0) { %><p class="empty">No API keys yet.</p><% } else { %>
+  <div class="scroll-x">
   <table>
-    <tr><th>Name</th><th>Key</th><th>Permissions</th><th>Created</th><th>Last used</th><th></th></tr>
+    <thead><tr><th>Name</th><th>Key</th><th>Permissions</th><th>Created</th><th>Last used</th><th></th></tr></thead>
+    <tbody>
     <% for (const k of activeKeys) { %>
     <tr>
-      <td><%= k.name %></td>
+      <td style="font-weight:500"><%= k.name %></td>
       <td><code><%= k.keyPrefix %>…</code></td>
-      <td><% const s = JSON.parse(k.scopes); %><%= s.includes('*') ? 'all' : s.join(', ') %></td>
+      <td><% const s = JSON.parse(k.scopes); %><% for (const sc of (s.includes('*') ? ['all'] : s)) { %><span class="badge" style="margin-right:0.2rem"><%= sc %></span><% } %></td>
       <td class="muted"><%= new Date(k.createdAt).toLocaleDateString() %></td>
       <td class="muted"><%= k.lastUsedAt ? new Date(k.lastUsedAt).toLocaleString() : 'never' %></td>
-      <td>
+      <td style="text-align:right">
         <form class="inline" method="post" action="/ui/apikeys/<%= k.id %>/revoke">
           <input type="hidden" name="_csrf" value="<%= csrf %>">
           <button class="danger" type="submit">Revoke</button>
@@ -41,11 +50,14 @@
       </td>
     </tr>
     <% } %>
+    </tbody>
   </table>
+  </div>
   <% } %>
 </div>
-<div class="card muted">
-  <p style="margin-top:0"><strong>REST:</strong> use keys as <code>Authorization: Bearer &lt;key&gt;</code> against <code>/api/v1/…</code>, e.g. <code>POST /api/v1/accounts/:accountId/messages</code>.</p>
-  <p style="margin-bottom:0"><strong>MCP:</strong> point AI agents at <code>POST /mcp</code> (Streamable HTTP) with the same Bearer key — tools are limited to the key's permissions. Example Claude config: <code>{"url": "<%= typeof baseUrl !== 'undefined' ? baseUrl : '' %>/mcp", "headers": {"Authorization": "Bearer &lt;key&gt;"}}</code></p>
+<div class="card">
+  <div class="card-head"><h3>Using a key</h3></div>
+  <p class="muted"><strong style="color:var(--fg)">REST:</strong> send it as <code>Authorization: Bearer &lt;key&gt;</code> to <code>/api/v1/…</code>, e.g. <code>POST /api/v1/accounts/:accountId/messages</code>.</p>
+  <p class="muted"><strong style="color:var(--fg)">MCP:</strong> point AI agents at <code>POST /mcp</code> (Streamable HTTP) with the same Bearer key; tools are limited to the key's permissions. Example Claude config: <code>{"url": "<%= typeof baseUrl !== 'undefined' ? baseUrl : '' %>/mcp", "headers": {"Authorization": "Bearer &lt;key&gt;"}}</code></p>
 </div>
 <%- include('_footer') %>

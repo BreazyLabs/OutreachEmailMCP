@@ -1,22 +1,31 @@
 <%- include('_header') %>
-<h1>Send log</h1>
-<div class="card">
-  <% if (jobs.length === 0) { %><p class="muted">Nothing sent yet.</p><% } else { %>
+<div class="pagehead">
+  <div>
+    <h1>Send log</h1>
+    <p class="sub">Every message submitted through SMTP, the API or the warmup engine, with its delivery status and the last error if a try failed.</p>
+  </div>
+</div>
+<div class="card flush">
+  <% if (jobs.length === 0) { %><p class="empty">Nothing sent yet.</p><% } else { %>
+  <div class="scroll-x">
   <table>
-    <tr><th>When</th><th>Account</th><th>To</th><th>Subject</th><th>Source</th><th>Status</th><th>Attempts</th><th>Error</th></tr>
+    <thead><tr><th>When</th><th>Mailbox</th><th>To</th><th>Subject</th><th>Source</th><th>Status</th><th class="num">Attempts</th><th>Error</th></tr></thead>
+    <tbody>
     <% for (const j of jobs) { %>
     <tr>
-      <td class="muted"><%= new Date(j.createdAt).toLocaleString() %></td>
+      <td class="muted" style="white-space:nowrap"><%= new Date(j.createdAt).toLocaleString() %></td>
       <td><%= j.accountEmail %></td>
       <td><%= j.envelope.to.join(', ') %></td>
       <td><%= j.subject || '—' %></td>
-      <td class="muted"><%= j.source %></td>
+      <td><span class="badge"><%= j.source %></span></td>
       <td><span class="badge <%= j.status %>"><%= j.status %></span></td>
-      <td class="muted"><%= j.attempts %></td>
-      <td class="muted"><%= j.lastError || '' %></td>
+      <td class="num muted"><%= j.attempts %></td>
+      <td class="muted" style="max-width:360px; word-break:break-word"><%= j.lastError || '' %></td>
     </tr>
     <% } %>
+    </tbody>
   </table>
+  </div>
   <% } %>
 </div>
 <%- include('_footer') %>

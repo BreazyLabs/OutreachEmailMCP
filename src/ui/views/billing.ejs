@@ -1,29 +1,40 @@
 <%- include('_header') %>
-<h1>Billing</h1>
-<div class="card">
-  <p>Workspace <strong><%= org.name %></strong> is on the
-    <span class="badge <%= org.plan === 'pro' ? 'active' : 'queued' %>"><%= org.plan %></span> plan.</p>
-  <table>
-    <tr><th>Usage</th><th>Current</th><th>Limit</th></tr>
-    <tr><td>Connected accounts</td><td><%= usage.accounts %></td><td><%= Number.isFinite(usage.maxAccounts) ? usage.maxAccounts : 'unlimited' %></td></tr>
-    <tr><td>Sends (last 24h)</td><td><%= usage.sends24h %></td><td><%= Number.isFinite(usage.dailySends) ? usage.dailySends : 'unlimited' %></td></tr>
-  </table>
-</div>
-<% if (stripeEnabled) { %>
-<div class="card">
-  <% if (org.plan === 'free') { %>
-  <form method="post" action="/ui/billing/checkout">
-    <input type="hidden" name="_csrf" value="<%= csrf %>">
-    <button type="submit">Upgrade to Pro</button>
-  </form>
-  <% } else if (org.stripeCustomerId) { %>
-  <form method="post" action="/ui/billing/portal">
-    <input type="hidden" name="_csrf" value="<%= csrf %>">
-    <button class="secondary" type="submit">Manage subscription</button>
-  </form>
+<div class="pagehead">
+  <div>
+    <h1>Billing</h1>
+    <p class="sub">Workspace <strong><%= org.name %></strong> is on the <span class="badge <%= org.plan === 'pro' ? 'active' : 'queued' %>"><%= org.plan %></span> plan.</p>
+  </div>
+  <% if (stripeEnabled) { %>
+  <div class="actions">
+    <% if (org.plan === 'free') { %>
+    <form method="post" action="/ui/billing/checkout" class="inline">
+      <input type="hidden" name="_csrf" value="<%= csrf %>">
+      <button type="submit">Upgrade to Pro</button>
+    </form>
+    <% } else if (org.stripeCustomerId) { %>
+    <form method="post" action="/ui/billing/portal" class="inline">
+      <input type="hidden" name="_csrf" value="<%= csrf %>">
+      <button class="secondary" type="submit">Manage subscription</button>
+    </form>
+    <% } %>
+  </div>
   <% } %>
 </div>
-<% } else { %>
-<p class="muted">Billing is not configured on this instance.</p>
-<% } %>
+<%
+  const meter = (used, max) => Number.isFinite(max) && max > 0 ? Math.min(100, Math.round((used / max) * 100)) : null;
+  const lines = [
+    { label: 'Connected mailboxes', used: usage.accounts, max: usage.maxAccounts },
+    { label: 'Sends, last 24h', used: usage.sends24h, max: usage.dailySends },
+  ];
+%>
+<div class="kpis">
+  <% for (const l of lines) { const p = meter(l.used, l.max); %>
+  <div class="kpi <%= p !== null && p >= 90 ? 'warn' : '' %>">
+    <div class="n"><%= l.used %><small> / <%= Number.isFinite(l.max) ? l.max : '∞' %></small></div>
+    <div class="l"><%= l.label %></div>
+    <% if (p !== null) { %><div style="height:6px; border-radius:99px; background:var(--line-soft); margin-top:0.6rem; overflow:hidden"><div style="height:100%; width:<%= p %>%; background:<%= p >= 90 ? 'var(--warn)' : 'var(--accent)' %>"></div></div><% } else { %><div class="muted">unlimited</div><% } %>
+  </div>
+  <% } %>
+</div>
+<% if (!stripeEnabled) { %><p class="muted">Billing is not configured on this instance.</p><% } %>
 <%- include('_footer') %>

@@ -25,66 +25,13 @@
   const picked = new Set(w.picked);
 %>
 <style>
-  .pagehead { display:flex; justify-content:space-between; align-items:center; gap:1rem; flex-wrap:wrap; margin-bottom:0.2rem; }
-  .pagehead h1 { margin:0.4rem 0; }
-  .pagehead .row { gap:0.4rem; }
-  .btn.ghost, button.ghost { background:transparent; color:var(--fg); border:1px solid var(--line); }
-  .btn.ghost:hover, button.ghost:hover { border-color:var(--accent); color:var(--accent); }
-  .kpis { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:0.7rem; margin-top:0.8rem; }
-  .kpi { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:0.65rem 0.85rem; }
-  .kpi .n { font-size:1.35rem; font-weight:700; font-variant-numeric:tabular-nums; line-height:1.15; }
-  .kpi .n small { font-size:0.8rem; color:var(--muted); font-weight:500; }
-  .kpi .l { color:var(--muted); font-size:0.74rem; text-transform:uppercase; letter-spacing:0.04em; margin-top:0.15rem; }
-  .kpi.bad .n { color:var(--err); } .kpi.good .n { color:var(--ok); } .kpi.warn .n { color:var(--warn); }
-  .badge.ramping { background:color-mix(in srgb, var(--warn) 15%, transparent); color:var(--warn); }
-  .badge.paused { background:color-mix(in srgb, var(--muted) 15%, transparent); color:var(--muted); }
-  .health { display:inline-flex; align-items:center; gap:0.35rem; font-weight:600; font-size:0.8rem; white-space:nowrap; }
-  .health .dot { width:9px; height:9px; border-radius:50%; display:inline-block; }
-  .health.healthy { color:var(--ok); } .health.healthy .dot { background:var(--ok); }
-  .health.watch { color:var(--warn); } .health.watch .dot { background:var(--warn); }
-  .health.at_risk { color:var(--err); } .health.at_risk .dot { background:var(--err); }
-  .health.no_data { color:var(--muted); } .health.no_data .dot { background:var(--muted); }
-  .num { font-variant-numeric:tabular-nums; text-align:right; white-space:nowrap; }
-  .tag { display:inline-block; padding:0 0.45rem; border-radius:99px; font-size:0.7rem; background:color-mix(in srgb, var(--accent) 12%, transparent); color:var(--accent); margin-left:0.2rem; vertical-align:1px; }
-  .status { display:flex; gap:0.5rem; align-items:center; font-size:0.85rem; }
-  .status .dot { width:9px; height:9px; border-radius:50%; background:var(--muted); }
-  .status.ok .dot { background:var(--ok); } .status.bad .dot { background:var(--err); }
-  .steps { display:flex; gap:0.4rem; align-items:center; flex-wrap:wrap; font-size:0.8rem; color:var(--muted); margin:0.6rem 0 0.2rem; }
+  .steps { display:flex; gap:0.5rem 0.9rem; align-items:center; flex-wrap:wrap; font-size:0.8rem; color:var(--muted); margin:-0.4rem 0 1.1rem; }
   .steps b { color:var(--fg); }
   .steps .arrow { opacity:0.5; }
-  dialog { border:1px solid var(--line); border-radius:12px; padding:0; background:var(--card); color:var(--fg); box-shadow:0 20px 60px rgba(0,0,0,0.25); }
-  dialog::backdrop { background:rgba(10,10,20,0.45); }
-  dialog.modal { width:min(760px, calc(100vw - 2rem)); max-height:calc(100vh - 3rem); overflow:hidden; }
-  dialog.slide { position:fixed; inset:0 0 0 auto; margin:0; height:100vh; max-height:100vh; width:min(820px, 100vw); border-radius:0; border-width:0 0 0 1px; transform:translateX(100%); transition:transform 0.22s ease; }
-  dialog.slide[open] { transform:none; }
-  @media (prefers-reduced-motion: reduce) { dialog.slide { transition:none; } }
-  .dlg { display:flex; flex-direction:column; }
-  dialog.modal .dlg { max-height:calc(100vh - 3rem); }
-  dialog.slide .dlg { height:100vh; }
-  .dlg header { display:flex; align-items:flex-start; justify-content:space-between; gap:1rem; padding:1rem 1.2rem 0.7rem; border-bottom:1px solid var(--line); }
-  .dlg header h2 { margin:0; font-size:1.05rem; }
-  .dlg header .who { color:var(--muted); font-size:0.8rem; margin-top:0.25rem; max-width:70ch; }
-  .dlg .body { padding:1rem 1.2rem; overflow:auto; flex:1 1 auto; min-height:0; }
-  .dlg footer { display:flex; gap:0.5rem; align-items:center; justify-content:flex-end; padding:0.7rem 1.2rem; border-top:1px solid var(--line); flex-wrap:wrap; }
-  .dlg footer .left { margin-right:auto; color:var(--muted); font-size:0.8rem; }
-  .x { background:transparent; border:none; color:var(--muted); font-size:1.3rem; line-height:1; cursor:pointer; padding:0.1rem 0.3rem; }
-  .field { display:grid; gap:0.25rem; margin-bottom:0.7rem; }
-  .field label { font-size:0.78rem; color:var(--muted); }
-  .field input, .field select, .field textarea { width:100%; }
-  .grid2 { display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:0 1rem; }
-  .grid3 { display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:0 1rem; }
-  .note { border-radius:8px; padding:0.6rem 0.8rem; font-size:0.85rem; margin:0 0 0.8rem; background:color-mix(in srgb, var(--warn) 12%, transparent); color:var(--warn); }
-  .note.ok { background:color-mix(in srgb, var(--ok) 12%, transparent); color:var(--ok); }
-  .note.bad { background:color-mix(in srgb, var(--err) 12%, transparent); color:var(--err); }
-  .note.info { background:color-mix(in srgb, var(--accent) 10%, transparent); color:var(--fg); }
   .tldpick { display:flex; gap:0.4rem; flex-wrap:wrap; }
   .tldpick label { border:1px solid var(--line); border-radius:99px; padding:0.15rem 0.6rem; font-size:0.82rem; cursor:pointer; }
   .tldpick label:has(input:checked) { border-color:var(--accent); background:color-mix(in srgb, var(--accent) 12%, transparent); color:var(--accent); }
   .tldpick input { display:none; }
-  tr.dim td { opacity:0.5; }
-  .reveal { filter: blur(4px); transition: filter 0.15s; } .reveal:hover { filter:none; }
-  h3.sect { font-size:0.9rem; margin:1.1rem 0 0.4rem; text-transform:uppercase; letter-spacing:0.04em; color:var(--muted); }
-  .empty { color:var(--muted); font-size:0.88rem; padding:0.6rem 0; }
   .wiz h3 { font-size:0.8rem; text-transform:uppercase; letter-spacing:0.05em; color:var(--muted); margin:1.2rem 0 0.5rem; display:flex; align-items:center; gap:0.5rem; }
   .wiz h3 .n { display:inline-flex; width:20px; height:20px; border-radius:50%; background:var(--accent); color:#fff; font-size:0.72rem; align-items:center; justify-content:center; }
   .patterns { display:flex; gap:0.4rem; flex-wrap:wrap; }
@@ -105,14 +52,16 @@
 </style>
 
 <div class="pagehead">
-  <h1>Domains</h1>
-  <div class="row">
+  <div>
+    <h1>Domains</h1>
+    <p class="sub">A batch goes from brand word to warmed mailboxes in one click: pick or paste domains, set up the person and the addresses, see what it costs, and the proxy buys the domains at Namecheap and orders the mailboxes at Premium Inboxes. Orders are checked every 10 minutes.</p>
+  </div>
+  <div class="actions">
     <button type="button" data-open="dlg-batch" <%= nc.configured || pi.configured ? '' : 'disabled title="Connect Namecheap and Premium Inboxes first"' %>>+ New batch</button>
     <% if (pi.configured) { %><form method="post" action="/ui/domains/orders/sync" style="display:inline"><input type="hidden" name="_csrf" value="<%= csrf %>"><button type="submit" class="ghost">Check orders now</button></form><% } %>
     <button type="button" class="ghost" data-open="dlg-integrations">Integrations</button>
   </div>
 </div>
-<p class="muted" style="max-width:80ch; margin:0.2rem 0 0.4rem">A batch goes from brand word to warmed mailboxes in one click: pick or paste domains, set up the person and the addresses, see what it costs, and the proxy buys the domains at Namecheap and orders the mailboxes at Premium Inboxes. Orders are checked every 10 minutes.</p>
 <div class="steps">
   <span class="status <%= nc.configured ? (nc.lastError ? 'bad' : 'ok') : '' %>"><span class="dot"></span>Namecheap <%= nc.configured ? (nc.lastError ? 'error' : 'connected') : 'not connected' %></span>
   <span class="arrow">·</span>
@@ -375,7 +324,7 @@
         </div>
         <div class="grid3">
           <div class="field"><label>Username (if different)</label><input name="username" value="<%= nc.username %>"></div>
-          <div class="field"><label style="margin-top:1.2rem"><input type="checkbox" name="sandbox" value="1" <%= nc.sandbox ? 'checked' : '' %>> Use the sandbox API</label></div>
+          <div class="field" style="align-content:end"><label style="display:flex; align-items:center; gap:0.45rem; color:var(--fg); padding:0.55rem 0"><input type="checkbox" name="sandbox" value="1" <%= nc.sandbox ? 'checked' : '' %>> Use the sandbox API</label></div>
         </div>
         <% const c = nc.contact || {}; %>
         <div class="grid3">

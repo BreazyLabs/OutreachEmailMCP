@@ -1,28 +1,31 @@
 <%- include('_header') %>
-<p class="muted" style="margin:0"><a href="/ui">← Mailboxes</a></p>
-<h1 style="margin-top:0.3rem"><%= account.email %> <span class="badge <%= account.status %>"><%= account.status %></span></h1>
-<p class="muted">
-  <%= account.provider %> · account id <code><%= account.id %></code>
-  <% if (account.lastError) { %> · last error: <%= account.lastError %><% } %>
-</p>
+<div class="crumb"><a href="/ui">Mailboxes</a> <span>/</span> <span><%= account.email %></span></div>
+<div class="pagehead">
+  <div>
+    <h1><%= account.email %> <span class="badge <%= account.status %>" style="vertical-align:4px"><%= account.status %></span></h1>
+    <p class="sub"><%= account.provider === 'google' ? 'Google Workspace' : account.provider === 'microsoft' ? 'Microsoft 365' : account.provider %> · account id <code><%= account.id %></code><% if (account.lastError) { %> · last error: <%= account.lastError %><% } %></p>
+  </div>
+</div>
 <% const an = typeof accountNames !== 'undefined' ? accountNames : { firstName: '', lastName: '', displayName: '', source: 'derived' }; %>
-<form method="post" action="/ui/accounts/<%= account.id %>/profile" class="row" style="margin:-0.3rem 0 0.4rem">
+<div class="card">
+<div class="card-head"><h3>Profile</h3><span class="muted">Used in sequencer exports; Instantly needs both names.<%= an.source === 'derived' ? ' Nothing stored yet: the export would use the guess shown in the placeholders.' : '' %></span></div>
+<form method="post" action="/ui/accounts/<%= account.id %>/profile" class="row" style="margin:0 0 0.7rem">
   <input type="hidden" name="_csrf" value="<%= csrf %>">
-  <label class="muted">Name</label>
+  <label class="muted" style="width:44px">Name</label>
   <input name="firstName" value="<%= account.firstName || '' %>" placeholder="First name<%= an.source === 'derived' && an.firstName ? ' (guess: ' + an.firstName + ')' : '' %>" style="width:170px">
   <input name="lastName" value="<%= account.lastName || '' %>" placeholder="Last name<%= an.source === 'derived' && an.lastName ? ' (guess: ' + an.lastName + ')' : '' %>" style="width:170px">
   <input name="displayName" value="<%= account.displayName || '' %>" placeholder="Display name" style="width:200px">
   <button type="submit" class="secondary">Save name</button>
   <button type="submit" name="refresh" value="1" class="secondary" title="Read the send-as name from Gmail or the directory entry from Microsoft 365">Fetch from provider</button>
-  <span class="muted">Used in sequencer exports; Instantly needs both names.<%= an.source === 'derived' ? ' Nothing stored yet: the export would use the guess shown in the placeholders.' : '' %></span>
 </form>
-<form method="post" action="/ui/accounts/<%= account.id %>/warmup/tags" class="row" style="margin:0 0 0.8rem">
+<form method="post" action="/ui/accounts/<%= account.id %>/warmup/tags" class="row">
   <input type="hidden" name="_csrf" value="<%= csrf %>">
-  <label class="muted" for="tags">Tags</label>
+  <label class="muted" for="tags" style="width:44px">Tags</label>
   <input id="tags" name="tags" value="<%= (typeof accountTags !== 'undefined' ? accountTags : []).join(', ') %>" placeholder="campaign-a, client-x (comma separated)" style="min-width:320px">
   <button type="submit" class="secondary">Save tags</button>
   <span class="muted">Bundle mailboxes per campaign; filter and edit the bundle on the Mailboxes page.</span>
 </form>
+</div>
 <% if (account.status === 'auth_error') { %>
   <div class="alert error">
     Authentication expired — <a href="/auth/<%= account.provider %>/start">reconnect this account</a>. Queued mail resumes automatically after reconnecting.
@@ -30,7 +33,7 @@
 <% } %>
 <% if (typeof warmupReady !== 'undefined' && !warmupReady && account.status === 'active') { %>
   <div class="alert error">
-    ⚠️ <strong>Warmup not enabled:</strong> this account was connected before mailbox-write access was added, so sequencer warmup (moving mail out of spam, marking read) can't sync upstream.
+    <strong>Warmup not enabled:</strong> this account was connected before mailbox-write access was added, so sequencer warmup (moving mail out of spam, marking read) can't sync upstream.
     <a href="/auth/<%= account.provider %>/start">Reconnect the account</a> to grant the new permission — existing credentials and history are kept.
   </div>
 <% } %>
@@ -88,10 +91,6 @@
   const landedClass = (l) => l === 'inbox' ? 'active' : (l === 'spam' || l === 'missing' || l === 'bounced') ? 'failed' : l ? 'queued' : '';
 %>
 <style>
-  .badge.ramping { background:color-mix(in srgb, var(--warn) 15%, transparent); color:var(--warn); }
-  .badge.steady { background:color-mix(in srgb, var(--ok) 15%, transparent); color:var(--ok); }
-  .badge.paused, .badge.off { background:color-mix(in srgb, var(--muted) 15%, transparent); color:var(--muted); }
-  .badge.auto_paused, .badge.blocked_upstream { background:color-mix(in srgb, var(--err) 15%, transparent); color:var(--err); }
   .wstats { display:flex; gap:1.4rem; flex-wrap:wrap; margin:0.6rem 0; font-size:0.9rem; }
   .wstats b { font-variant-numeric:tabular-nums; }
   .persona-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:0.6rem; }
@@ -99,15 +98,7 @@
   .persona-grid input { width:100%; }
   details.panel summary { cursor:pointer; font-weight:600; font-size:0.9rem; }
   .flags { color:var(--muted); font-size:0.78rem; white-space:nowrap; }
-  .health { display:inline-flex; align-items:center; gap:0.35rem; font-weight:700; font-size:0.95rem; }
-  .health .dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
-  .health.healthy { color:var(--ok); } .health.healthy .dot { background:var(--ok); }
-  .health.watch { color:var(--warn); } .health.watch .dot { background:var(--warn); }
-  .health.at_risk { color:var(--err); } .health.at_risk .dot { background:var(--err); }
-  .health.cant_send { color:var(--err); font-weight:700; } .health.cant_send .dot { background:var(--err); box-shadow:0 0 0 3px color-mix(in srgb, var(--err) 22%, transparent); }
-  .health.no_data, .health.off { color:var(--muted); } .health.no_data .dot, .health.off .dot { background:var(--muted); }
-  .legend { display:flex; gap:1rem; flex-wrap:wrap; font-size:0.78rem; color:var(--muted); margin:0.4rem 0 0; }
-  .legend span::before { content:""; display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:0.35rem; vertical-align:-1px; background:var(--c); }
+  .health { font-size:0.95rem; }
   .reasons { margin:0.3rem 0 0; padding-left:1.1rem; font-size:0.82rem; color:var(--muted); }
 </style>
 <h2>Warmup</h2>
