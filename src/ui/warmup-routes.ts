@@ -30,6 +30,7 @@ import { logActivity } from '../observability/activity.js';
 import { orgTagCounts, splitTagInput, setAccountTags } from '../accounts/tags.js';
 import { accountsMissingNames, refreshAccountProfiles } from '../accounts/profile.js';
 import { deleteAccount } from '../accounts/delete.js';
+import { sendTestEmails, isAddress } from '../accounts/test-send.js';
 import { SEQUENCER_LABELS } from '../export/accounts-csv.js';
 import type { SessionContext } from './session.js';
 import type { FastifyReply, FastifyRequest } from 'fastify';
@@ -163,6 +164,16 @@ export function registerWarmupUiRoutes(app: FastifyInstance): void {
       const owned = accountIds.map((id) => ownedAccount(id, session.org.id)).filter((a) => a !== undefined);
       for (const account of owned) deleteAccount(account.id);
       return reply.redirect(back('notice', `${owned.length} mailbox${owned.length === 1 ? '' : 'es'} disconnected.`));
+    }
+    if (action === 'test_send') {
+      const to = String(body.test_to ?? '').trim();
+      if (!isAddress(to)) return reply.redirect(back('error', 'Type the address the test emails should go to.'));
+      const results = await sendTestEmails(session.org.id, accountIds, to);
+      const ok = results.filter((r) => r.ok).length;
+      const failed = results.filter((r) => !r.ok);
+      const parts = [`${ok} test email${ok === 1 ? '' : 's'} queued to ${to}; each subject names the mailbox it came from. Check the inbox and the spam folder; the send log shows each result`];
+      if (failed.length) parts.push(`${failed.length} skipped: ${failed.slice(0, 3).map((r) => `${r.email} (${r.error})`).join(', ')}${failed.length > 3 ? '…' : ''}`);
+      return reply.redirect(back(ok ? 'notice' : 'error', parts.join(' · ') + '.'));
     }
     if (action === 'refresh_profile') {
       const results = await refreshAccountProfiles(session.org.id, accountIds);

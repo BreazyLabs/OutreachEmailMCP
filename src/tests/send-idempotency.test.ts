@@ -106,3 +106,35 @@ describe('GET send-jobs?messageId= lookup', () => {
     await app.close();
   });
 });
+
+describe('test emails from selected mailboxes', () => {
+  it('queues one plain email per active mailbox of the workspace, and skips the rest', async () => {
+    const { db, schema } = await import('../db/index.js');
+    const { createOrgWithOwner } = await import('../tenancy/orgs.js');
+    const { sendTestEmails } = await import('../accounts/test-send.js');
+    const { eq } = await import('drizzle-orm');
+    const fs = await import('node:fs');
+    const orgId = createOrgWithOwner({ orgName: 'Tester', email: 'o@tester.test', password: 'pw-pw-pw-pw-1' }).orgId;
+    const other = createOrgWithOwner({ orgName: 'Other', email: 'o@other-org.test', password: 'pw-pw-pw-pw-1' }).orgId;
+    const now = Date.now();
+    const add = (id: string, org: string, email: string, status: 'active' | 'auth_error' | 'disabled') =>
+      db.insert(schema.accounts).values({ id, orgId: org, provider: 'microsoft', email, displayName: 'Fons M', status, createdAt: now, updatedAt: now }).run();
+    add('ts1', orgId, 'fons@t1.test', 'active');
+    add('ts2', orgId, 'fons@t2.test', 'auth_error');
+    add('ts3', orgId, 'fons@t3.test', 'disabled');
+    add('ts4', other, 'fons@t4.test', 'active');
+
+    await expect(sendTestEmails(orgId, ['ts1'], 'not an address')).rejects.toThrow(/not an email address/);
+    const results = await sendTestEmails(orgId, ['ts1', 'ts2', 'ts3', 'ts4'], ' me@check.test ');
+    expect(results.map((r) => [r.email, r.ok, r.error ?? null]).sort()).toEqual([
+      ['fons@t1.test', true, null],
+      ['fons@t2.test', false, 'needs reconnecting first'],
+      ['fons@t3.test', false, 'disabled'],
+    ]);
+    const job = db.select().from(schema.sendJobs).where(eq(schema.sendJobs.id, results.find((r) => r.ok)!.jobId!)).get()!;
+    expect(job.subject).toBe('Test from fons@t1.test');
+    const raw = fs.readFileSync(job.rawPath!, 'utf8');
+    expect(raw).toMatch(/^From: "?Fons M"? <fons@t1\.test>/m);
+    expect(raw).toMatch(/^To: me@check\.test/m);
+  });
+});

@@ -383,6 +383,34 @@ describe('warmup end to end', () => {
     expect(db.select().from(schema.warmupLandings).where(eq(schema.warmupLandings.messageId, m.id)).get()!.landed).toBe('missing');
   });
 
+  it('never blames the sender for mail to a recipient that cannot be polled', async () => {
+    const { db, schema } = await import('../db/index.js');
+    const { eq } = await import('drizzle-orm');
+    const { markMissing, registerMessage, onWarmupJobSent } = await import('../warmup/ledger.js');
+    const { newWarmupMessageId } = await import('../warmup/identity.js');
+    const send = (to: string, subject: string) => {
+      const m = registerMessage({ threadId: 't-' + subject, turn: 0, kind: 'open', fromAccountId: A, toAccountId: to, rfcMessageId: newWarmupMessageId('alice@alpha.test').normalized, subject, contentSource: 'template', localDate: '2026-09-01' });
+      onWarmupJobSent({ warmupMessageId: m.id } as never);
+      return m;
+    };
+    const landingOf = (messageId: string) => db.select().from(schema.warmupLandings).where(eq(schema.warmupLandings.messageId, messageId)).get();
+    const later = Date.now() + 7 * 3600_000;
+
+    // Recipient disabled: undecided, not missing; once it is back it is judged.
+    db.update(schema.accounts).set({ status: 'disabled' }).where(eq(schema.accounts.id, B)).run();
+    const toDisabled = send(B, 'To a parked mailbox');
+    expect(markMissing(later)).toBe(0);
+    expect(landingOf(toDisabled.id)!.landed).toBeNull();
+    db.update(schema.accounts).set({ status: 'active' }).where(eq(schema.accounts.id, B)).run();
+    expect(markMissing(later)).toBe(1);
+    expect(landingOf(toDisabled.id)!.landed).toBe('missing');
+
+    // Recipient removed: nothing left to judge, so the landing goes.
+    const toGone = send('removed-account-id', 'To a removed mailbox');
+    expect(markMissing(later)).toBe(0);
+    expect(landingOf(toGone.id)).toBeUndefined();
+  });
+
   it('exposes the read models the UI and API use', async () => {
     const { getOrg } = await import('../tenancy/orgs.js');
     const { orgWarmupOverview, accountWarmupDetail, recentWarmupMessages } = await import('../warmup/stats.js');

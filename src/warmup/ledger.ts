@@ -170,15 +170,24 @@ export function onWarmupBounce(job: SendJob, recipient: string | null, diagnosti
 
 /** Sent, past its arrival deadline, seen nowhere: missing. Returns count. */
 export function markMissing(now = Date.now()): number {
+  // Only a recipient that is connected and being polled can say mail never
+  // arrived. Mail to a mailbox that has since been removed cannot be judged
+  // at all, so it is dropped; mail to one that is disabled or needs
+  // reconnecting stays undecided until it is polled again.
+  db.delete(schema.warmupLandings)
+    .where(and(isNull(schema.warmupLandings.landed), sql`${schema.warmupLandings.toAccountId} NOT IN (SELECT id FROM accounts)`))
+    .run();
   const rows = db
     .select({ landing: schema.warmupLandings, message: schema.warmupMessages })
     .from(schema.warmupLandings)
     .innerJoin(schema.warmupMessages, eq(schema.warmupMessages.id, schema.warmupLandings.messageId))
+    .innerJoin(schema.accounts, eq(schema.accounts.id, schema.warmupLandings.toAccountId))
     .where(
       and(
         isNull(schema.warmupLandings.landed),
         sql`${schema.warmupMessages.sentAt} IS NOT NULL`,
         lt(schema.warmupMessages.expectedBy, now),
+        eq(schema.accounts.status, 'active'),
       ),
     )
     .limit(500)
