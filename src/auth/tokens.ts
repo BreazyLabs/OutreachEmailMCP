@@ -70,7 +70,12 @@ export interface ProviderProblem {
 // again, and /healthz shows it so the operator sees it before the customers do.
 const providerProblems = new Map<string, ProviderProblem>();
 const PROVIDER_PROBLEM_LOG_INTERVAL_MS = 30 * 60_000;
+// When the problem was last written to the log, and whether that write has
+// been answered by an "accepted again" yet. A provider that flaps (a freshly
+// rotated secret takes minutes to reach all of Microsoft's token servers)
+// still gets at most one pair of rows per interval.
 const providerProblemLoggedAt = new Map<string, number>();
+const providerProblemAnnounced = new Set<string>();
 
 /** Providers whose app credentials are currently being rejected. */
 export function currentProviderProblems(): ProviderProblem[] {
@@ -91,6 +96,7 @@ function noteProviderProblem(err: ProviderConfigError, account: { id: string; em
   // activity row per provider per half hour, not one per attempt.
   if (now - (providerProblemLoggedAt.get(err.provider) ?? 0) < PROVIDER_PROBLEM_LOG_INTERVAL_MS) return;
   providerProblemLoggedAt.set(err.provider, now);
+  providerProblemAnnounced.add(err.provider);
   logger.error({ provider: err.provider, err: err.message, accountId: account.id, email: account.email }, 'provider rejects our OAuth app credentials; no account is paused, fix the app registration');
   logActivity({
     category: 'oauth',
@@ -104,7 +110,7 @@ function noteProviderProblem(err: ProviderConfigError, account: { id: string; em
 
 function clearProviderProblem(provider: string): void {
   if (!providerProblems.delete(provider)) return;
-  providerProblemLoggedAt.delete(provider);
+  if (!providerProblemAnnounced.delete(provider)) return;
   logger.info({ provider }, 'provider accepts our OAuth app credentials again');
   logActivity({ category: 'oauth', action: 'provider-config', status: 'ok', detail: `${provider}: app credentials accepted again` });
 }
@@ -184,28 +190,48 @@ async function getAccessTokenInner(accountId: string): Promise<string> {
   }
 }
 
-// Proactively refresh tokens expiring soon so long-idle accounts stay warm.
+/** How long a paused (auth_error) account waits between refresh retries. */
+export const AUTH_ERROR_RETRY_MS = 60 * 60_000;
+
+/** One sweep pass: refresh active accounts whose token expires within 15
+ *  minutes so long-idle accounts stay warm, and retry paused accounts once
+ *  an hour. The retry is what heals a pause caused on our side (an expired
+ *  app secret before ProviderConfigError existed, an outage misread as a
+ *  revoked grant) without waiting for a sequencer to touch the mailbox; a
+ *  genuinely revoked grant just fails again and moves its clock forward,
+ *  since markAuthError stamps updatedAt. */
+export async function refreshDueTokens(now = Date.now()): Promise<void> {
+  const soon = now + 15 * 60_000;
+  const rows = db
+    .select({
+      accountId: schema.oauthTokens.accountId,
+      expiresAt: schema.oauthTokens.expiresAt,
+      status: schema.accounts.status,
+      updatedAt: schema.accounts.updatedAt,
+    })
+    .from(schema.oauthTokens)
+    .innerJoin(schema.accounts, eq(schema.accounts.id, schema.oauthTokens.accountId))
+    .all();
+  for (const row of rows) {
+    if (row.status === 'active') {
+      if (row.expiresAt > soon) continue;
+    } else if (row.status === 'auth_error') {
+      if (row.updatedAt > now - AUTH_ERROR_RETRY_MS) continue;
+    } else {
+      continue;
+    }
+    try {
+      await getAccessToken(row.accountId);
+    } catch (err) {
+      logger.warn({ accountId: row.accountId, status: row.status, err: String(err) }, 'sweep refresh failed');
+    }
+  }
+}
+
 export function startTokenRefreshSweep(): NodeJS.Timeout {
   const SWEEP_INTERVAL = 10 * 60_000;
-  const timer = setInterval(async () => {
-    const soon = Date.now() + 15 * 60_000;
-    const rows = db
-      .select({
-        accountId: schema.oauthTokens.accountId,
-        expiresAt: schema.oauthTokens.expiresAt,
-        status: schema.accounts.status,
-      })
-      .from(schema.oauthTokens)
-      .innerJoin(schema.accounts, eq(schema.accounts.id, schema.oauthTokens.accountId))
-      .all();
-    for (const row of rows) {
-      if (row.status !== 'active' || row.expiresAt > soon) continue;
-      try {
-        await getAccessToken(row.accountId);
-      } catch (err) {
-        logger.warn({ accountId: row.accountId, err: String(err) }, 'sweep refresh failed');
-      }
-    }
+  const timer = setInterval(() => {
+    refreshDueTokens().catch((err) => logger.warn({ err: String(err) }, 'token sweep failed'));
   }, SWEEP_INTERVAL);
   timer.unref();
   return timer;

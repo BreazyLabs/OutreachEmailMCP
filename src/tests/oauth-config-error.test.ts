@@ -54,4 +54,27 @@ describe('token endpoint errors about our own app', () => {
     expect(currentProviderProblems()).toEqual([]);
     expect(rows().filter((r) => r.status === 'ok')).toHaveLength(1);
   });
+
+  it('sweep retries a paused account once an hour and reactivates it when the refresh works', async () => {
+    const { db, schema, runMigrations } = await import('../db/index.js');
+    runMigrations();
+    const { eq } = await import('drizzle-orm');
+    const { saveTokens, refreshDueTokens, AUTH_ERROR_RETRY_MS } = await import('../auth/tokens.js');
+    const now = Date.now();
+    const id = 'acc-ms-paused';
+    db.insert(schema.accounts).values({ id, orgId: 'org_default', provider: 'microsoft', email: 'paused@ms.test', displayName: null, status: 'auth_error', lastError: 'invalid_client: AADSTS7000222: expired', createdAt: now, updatedAt: now }).run();
+    saveTokens(id, { accessToken: 'old', refreshToken: 'rt', expiresAt: now - 1, scopes: 's' });
+    const row = () => db.select({ status: schema.accounts.status, lastError: schema.accounts.lastError }).from(schema.accounts).where(eq(schema.accounts.id, id)).get()!;
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(tokenReply(200, { access_token: 'fresh', refresh_token: 'rt2', expires_in: 3600 }));
+
+    // Paused less than an hour ago: left alone.
+    await refreshDueTokens(now + AUTH_ERROR_RETRY_MS - 1);
+    expect(fetchMock.mock.calls.filter(([u]) => String(u).includes('/token'))).toHaveLength(0);
+    expect(row().status).toBe('auth_error');
+
+    // An hour on: retried, and back in service.
+    await refreshDueTokens(now + AUTH_ERROR_RETRY_MS + 1);
+    expect(fetchMock.mock.calls.filter(([u]) => String(u).includes('/token'))).toHaveLength(1);
+    expect(row()).toEqual({ status: 'active', lastError: null });
+  });
 });
