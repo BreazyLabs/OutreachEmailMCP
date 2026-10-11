@@ -2,7 +2,7 @@ import { eq } from 'drizzle-orm';
 import { db, schema } from '../db/index.js';
 import { encryptSecret, decryptSecret } from '../crypto/secrets.js';
 import { refreshTokenGrant, type ProviderName, type TokenSet } from '../providers/oauth.js';
-import { AuthError } from '../providers/errors.js';
+import { AuthError, ProviderConfigError } from '../providers/errors.js';
 import { logger } from '../logger.js';
 import { logActivity } from '../observability/activity.js';
 
@@ -56,6 +56,59 @@ export function hasRefreshToken(accountId: string): boolean {
   }
 }
 
+export interface ProviderProblem {
+  provider: string;
+  error: string;
+  since: number;
+  lastSeen: number;
+  /** Refresh attempts that failed on it. */
+  failures: number;
+}
+
+// One record per provider whose OAuth app is rejecting us outright. Kept in
+// memory: it is a live condition, cleared by the first refresh that works
+// again, and /healthz shows it so the operator sees it before the customers do.
+const providerProblems = new Map<string, ProviderProblem>();
+const PROVIDER_PROBLEM_LOG_INTERVAL_MS = 30 * 60_000;
+const providerProblemLoggedAt = new Map<string, number>();
+
+/** Providers whose app credentials are currently being rejected. */
+export function currentProviderProblems(): ProviderProblem[] {
+  return [...providerProblems.values()];
+}
+
+function noteProviderProblem(err: ProviderConfigError, account: { id: string; email: string }): void {
+  const now = Date.now();
+  const existing = providerProblems.get(err.provider);
+  if (existing) {
+    existing.error = err.message;
+    existing.lastSeen = now;
+    existing.failures++;
+  } else {
+    providerProblems.set(err.provider, { provider: err.provider, error: err.message, since: now, lastSeen: now, failures: 1 });
+  }
+  // Every sequencer login hits this for every account: one log line and one
+  // activity row per provider per half hour, not one per attempt.
+  if (now - (providerProblemLoggedAt.get(err.provider) ?? 0) < PROVIDER_PROBLEM_LOG_INTERVAL_MS) return;
+  providerProblemLoggedAt.set(err.provider, now);
+  logger.error({ provider: err.provider, err: err.message, accountId: account.id, email: account.email }, 'provider rejects our OAuth app credentials; no account is paused, fix the app registration');
+  logActivity({
+    category: 'oauth',
+    action: 'provider-config',
+    status: 'failed',
+    accountId: account.id,
+    detail: `${err.provider}: the provider rejects this gateway's OAuth app credentials (client id/secret). Accounts are not paused; they recover once the app is fixed.`,
+    error: err.message,
+  });
+}
+
+function clearProviderProblem(provider: string): void {
+  if (!providerProblems.delete(provider)) return;
+  providerProblemLoggedAt.delete(provider);
+  logger.info({ provider }, 'provider accepts our OAuth app credentials again');
+  logActivity({ category: 'oauth', action: 'provider-config', status: 'ok', detail: `${provider}: app credentials accepted again` });
+}
+
 export function markAuthError(accountId: string, message: string): void {
   db.update(schema.accounts)
     .set({ status: 'auth_error', lastError: message.slice(0, 500), updatedAt: Date.now() })
@@ -99,6 +152,7 @@ async function getAccessTokenInner(accountId: string): Promise<string> {
   try {
     const tokens = await refreshTokenGrant(account.provider as ProviderName, refreshToken);
     saveTokens(accountId, tokens);
+    clearProviderProblem(account.provider);
     if (account.status === 'auth_error') {
       db.update(schema.accounts)
         .set({ status: 'active', lastError: null, updatedAt: Date.now() })
@@ -108,7 +162,11 @@ async function getAccessTokenInner(accountId: string): Promise<string> {
     logger.debug({ accountId, email: account.email }, 'refreshed access token');
     return tokens.accessToken;
   } catch (err) {
-    if (err instanceof AuthError) {
+    if (err instanceof ProviderConfigError) {
+      // Our app, not this account: leave its status alone so nothing downstream
+      // treats it as broken, and surface the condition once.
+      noteProviderProblem(err, account);
+    } else if (err instanceof AuthError) {
       markAuthError(accountId, err.message);
       logger.warn(
         { accountId, email: account.email, err: err.message },

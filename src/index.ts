@@ -16,7 +16,7 @@ import { registerSsoRoutes } from './auth/sso.js';
 import { registerPartnerSsoRoutes } from './auth/partner-sso.js';
 import { registerPocketIdRoutes } from './auth/pocket-id.js';
 import { registerOauthRoutes } from './auth/oauth-routes.js';
-import { startTokenRefreshSweep } from './auth/tokens.js';
+import { currentProviderProblems, startTokenRefreshSweep } from './auth/tokens.js';
 import { startActivityPruner } from './observability/activity.js';
 import { startHealthReporter } from './observability/healthcheck.js';
 import { registerUiRoutes } from './ui/routes.js';
@@ -82,6 +82,10 @@ async function main() {
       role: isLeader() ? 'leader' : 'follower',
       leader: currentHolder()?.holder ?? null,
       draining,
+      // OAuth apps whose credentials a provider is rejecting (expired client
+      // secret and the like). Not a 503: the gateway is up, mail on that
+      // provider is not, and the fix is in the provider's portal.
+      providerProblems: currentProviderProblems(),
     };
     return reply.code(body.ok ? 200 : 503).send(body);
   });

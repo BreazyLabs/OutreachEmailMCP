@@ -1,6 +1,6 @@
 import { config } from '../config.js';
 import { upstreamSignal } from './http.js';
-import { AuthError, isMailboxUnavailable, RetryableError } from './errors.js';
+import { AuthError, isAppSideTokenError, isMailboxUnavailable, ProviderConfigError, RetryableError } from './errors.js';
 
 export type ProviderName = 'google' | 'microsoft';
 
@@ -134,6 +134,10 @@ async function tokenRequest(
   const body = (await res.json().catch(() => ({}))) as TokenResponse;
   if (!res.ok || !body.access_token) {
     const desc = `${body.error ?? res.status}: ${body.error_description ?? 'token request failed'}`;
+    // The app's own credentials are rejected: nothing an individual account did.
+    if (isAppSideTokenError(body.error, body.error_description)) {
+      throw new ProviderConfigError(provider, desc);
+    }
     if (body.error === 'invalid_grant' || res.status === 400 || res.status === 401) {
       throw new AuthError(desc);
     }

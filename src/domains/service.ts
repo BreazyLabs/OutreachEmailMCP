@@ -653,56 +653,118 @@ function brokenReason(a: { status: string; lastError: string | null }): string {
   return a.lastError && a.status === 'auth_error' ? `${why}: ${a.lastError.slice(0, 160)}` : why;
 }
 
+/** After a ticket, later breakages on the same order wait this long before
+ *  another one goes out, so a slow cascade is two tickets, not twenty. */
+export const TICKET_COOLDOWN_MS = 24 * 3600_000;
+/** From this many not-yet-reported breakages in one pass the tickets are held:
+ *  mailboxes do not break in bulk, gateways and OAuth apps do. */
+export const MASS_FAILURE_MIN = 10;
+/** ...or from this share of the order mailboxes connected here (at least 4 of them). */
+export const MASS_FAILURE_SHARE = 0.5;
+/** A hold that outlives this goes out after all: by then it is the vendor's problem too. */
+export const MASS_FAILURE_HOLD_MS = 12 * 3600_000;
+
+// Failure messages that point at this gateway rather than at the mailbox: an
+// expired client secret, no token on file, the token endpoint down. The vendor
+// can do nothing about them, so they never reach a ticket.
+const OUR_SIDE_SIGNALS = ['invalid_client', 'unauthorized_client', 'AADSTS7000', 'Token endpoint unreachable', 'no stored tokens', 'No refresh token stored'];
+
+export function isVendorSideBreakage(a: { status: string; lastError: string | null }): boolean {
+  if (a.status !== 'auth_error' && a.status !== 'disabled') return false;
+  if (a.status === 'disabled' || !a.lastError) return true;
+  const err = a.lastError;
+  return !OUR_SIDE_SIGNALS.some((s) => err.includes(s));
+}
+
+// Per workspace: when a mass failure first put its tickets on hold.
+const massFailureHeldSince = new Map<string, number>();
+
 /** Mailboxes an order delivered that went to auth_error or disabled here are
- *  reported to Premium Inboxes: one ticket per order naming all of them. A new
- *  ticket only goes out when a mailbox breaks that the last one did not name;
- *  a mailbox that recovers is forgotten, so breaking again reports it again.
+ *  reported to Premium Inboxes: one ticket per order naming the ones not yet
+ *  reported. A new ticket only goes out when a mailbox breaks that the last
+ *  one did not name, and not within TICKET_COOLDOWN_MS of that one; a mailbox
+ *  that recovers is forgotten, so breaking again reports it again. Breakage
+ *  caused on our side is never reported, and when many mailboxes break at
+ *  once the tickets are held and the integration flagged instead.
  *  Needs the portal login; returns how many tickets were opened. */
-export async function reportBrokenMailboxes(orgId: string): Promise<number> {
+export async function reportBrokenMailboxes(orgId: string, now = Date.now()): Promise<number> {
   const portal = clients.premiuminboxesPortal(orgId);
   if (!portal) return 0;
-  const broken = new Map(
-    db
-      .select({ email: schema.accounts.email, status: schema.accounts.status, lastError: schema.accounts.lastError })
-      .from(schema.accounts)
-      .where(and(eq(schema.accounts.orgId, orgId), inArray(schema.accounts.status, ['auth_error', 'disabled'])))
-      .all()
-      .map((a) => [a.email.toLowerCase(), a]),
-  );
-  let opened = 0;
-  let failure: unknown = null;
-  let selfWorkspace: string | null | undefined;
+  const accounts = db
+    .select({ email: schema.accounts.email, status: schema.accounts.status, lastError: schema.accounts.lastError })
+    .from(schema.accounts)
+    .where(eq(schema.accounts.orgId, orgId))
+    .all();
+  const connected = new Set(accounts.map((a) => a.email.toLowerCase()));
+  const broken = new Map(accounts.filter(isVendorSideBreakage).map((a) => [a.email.toLowerCase(), a]));
+
+  // What each live order would report, with its ticket state brought up to date.
+  interface Pending { order: ProviderOrder; workspaceId: string | null; prev: OrderTicket | null; brokenHere: string[]; fresh: string[]; still: string[] }
+  const pending: Pending[] = [];
+  let connectedInOrders = 0;
   for (const order of listOrders(orgId)) {
     const result = orderResult(order);
     const prev = orderTicket(order);
     if (!result || isCancelled(result.status, result.subscription?.status)) continue;
     const delivered = result.emails.filter((e) => !/cancel/i.test(e.status ?? '')).map((e) => e.email.toLowerCase());
+    connectedInOrders += delivered.filter((e) => connected.has(e)).length;
     const brokenHere = delivered.filter((e) => broken.has(e));
+    const still = (prev?.emails ?? []).filter((e) => brokenHere.includes(e));
     const fresh = brokenHere.filter((e) => !prev?.emails.includes(e));
-    if (fresh.length === 0) {
-      const still = (prev?.emails ?? []).filter((e) => brokenHere.includes(e));
-      if (prev && still.length !== prev.emails.length) {
-        db.update(schema.providerOrders).set({ ticketJson: JSON.stringify({ ...prev, emails: still }) }).where(eq(schema.providerOrders.id, order.id)).run();
-      }
-      continue;
+    if (prev && still.length !== prev.emails.length) {
+      db.update(schema.providerOrders).set({ ticketJson: JSON.stringify({ ...prev, emails: still }) }).where(eq(schema.providerOrders.id, order.id)).run();
     }
+    if (fresh.length > 0) pending.push({ order, workspaceId: result.workspaceId ?? null, prev, brokenHere, fresh, still });
+  }
+
+  const freshTotal = pending.reduce((n, p) => n + p.fresh.length, 0);
+  if (freshTotal === 0) {
+    massFailureHeldSince.delete(orgId);
+    return 0;
+  }
+  const mass = freshTotal >= MASS_FAILURE_MIN || (connectedInOrders >= 4 && freshTotal >= connectedInOrders * MASS_FAILURE_SHARE);
+  if (mass) {
+    const since = massFailureHeldSince.get(orgId);
+    if (since === undefined || now - since < MASS_FAILURE_HOLD_MS) {
+      if (since === undefined) {
+        massFailureHeldSince.set(orgId, now);
+        const hours = Math.round(MASS_FAILURE_HOLD_MS / 3600_000);
+        const detail = `${freshTotal} mailboxes broke at once across ${pending.length} order${pending.length === 1 ? '' : 's'}; that points at this gateway (OAuth app, outage) rather than the mailboxes, so no tickets were opened. They go out after ${hours}h if still broken.`;
+        logger.warn({ orgId, freshTotal, orders: pending.map((p) => p.order.externalId) }, 'mass mailbox failure: Premium Inboxes tickets held');
+        logActivity({ category: 'domains', action: 'ticket-held', status: 'failed', orgId, detail });
+        markIntegration(orgId, 'premiuminboxes', { ok: false, error: `Tickets held: ${detail}` });
+      }
+      return 0;
+    }
+  } else {
+    massFailureHeldSince.delete(orgId);
+  }
+
+  let opened = 0;
+  let failure: unknown = null;
+  let selfWorkspace: string | null | undefined;
+  for (const { order, workspaceId: orderWorkspace, prev, brokenHere, fresh, still } of pending) {
+    // Inside the cooldown the fresh ones wait; they stay out of `emails`, so
+    // the next pass after it still sees them as news.
+    if (prev && now - prev.openedAt < TICKET_COOLDOWN_MS) continue;
     const notes = [
       `These mailboxes from order ${order.externalId} stopped working on our side:`,
       '',
-      ...brokenHere.map((e) => `- ${e}: ${brokenReason(broken.get(e)!)}`),
+      ...fresh.map((e) => `- ${e}: ${brokenReason(broken.get(e)!)}`),
+      ...(still.length > 0 ? ['', `Still not working since our earlier ticket: ${still.join(', ')}`] : []),
       '',
       'Please check them and restore access (or replace them). This ticket was opened automatically by our email gateway.',
     ].join('\n');
     try {
-      let workspaceId = result.workspaceId ?? null;
+      let workspaceId = orderWorkspace;
       if (!workspaceId) workspaceId = selfWorkspace === undefined ? (selfWorkspace = await portal.selfWorkspaceId()) : selfWorkspace;
-      const ticketId = await portal.createTicket({ type: PI_TICKET_DISCONNECTED, order: order.externalId, emailAccounts: brokenHere, notes }, workspaceId);
-      const ticket: OrderTicket = { ticketId, emails: brokenHere, openedAt: Date.now() };
+      const ticketId = await portal.createTicket({ type: PI_TICKET_DISCONNECTED, order: order.externalId, emailAccounts: fresh, notes }, workspaceId);
+      const ticket: OrderTicket = { ticketId, emails: brokenHere, openedAt: now };
       db.update(schema.providerOrders).set({ ticketJson: JSON.stringify(ticket) }).where(eq(schema.providerOrders.id, order.id)).run();
-      logActivity({ category: 'domains', action: 'ticket', status: 'ok', orgId, detail: `${order.externalId}: ${brokenHere.join(', ')}` });
+      logActivity({ category: 'domains', action: 'ticket', status: 'ok', orgId, detail: `${order.externalId}: ${fresh.join(', ')}` });
       opened++;
     } catch (err) {
-      logActivity({ category: 'domains', action: 'ticket', status: 'failed', orgId, detail: `${order.externalId}: ${brokenHere.join(', ')}`, error: String(err).slice(0, 300) });
+      logActivity({ category: 'domains', action: 'ticket', status: 'failed', orgId, detail: `${order.externalId}: ${fresh.join(', ')}`, error: String(err).slice(0, 300) });
       markIntegration(orgId, 'premiuminboxes', { ok: false, error: `Could not open a ticket: ${String(err).slice(0, 300)}` });
       failure ??= err;
     }

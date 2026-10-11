@@ -337,28 +337,99 @@ describe('Premium Inboxes client and order flow', () => {
     expect(await service.reportBrokenMailboxes(orgId)).toBe(0);
     expect(tickets).toHaveLength(1);
 
-    // One recovers: forgotten. Another breaks while the session has expired: re-login, a new ticket with all broken ones.
+    // One recovers: forgotten. Another breaks while the session has expired: inside the
+    // cooldown it waits; after it, re-login and a ticket naming only the new one.
     setStatus('t1@ticket.nl', 'active');
     expect(await service.reportBrokenMailboxes(orgId)).toBe(0);
     expect(service.orderTicket(order())?.emails).toEqual(['t2@ticket.nl']);
     setStatus('t3@ticket.nl', 'auth_error');
+    expect(await service.reportBrokenMailboxes(orgId, now + service.TICKET_COOLDOWN_MS - 60_000)).toBe(0);
+    expect(tickets).toHaveLength(1);
     expireNext = true;
-    expect(await service.reportBrokenMailboxes(orgId)).toBe(1);
+    const later = now + service.TICKET_COOLDOWN_MS + 60_000;
+    expect(await service.reportBrokenMailboxes(orgId, later)).toBe(1);
     expect(logins).toBe(2);
     expect(tickets[1]!.headers.Authorization).toBe('Bearer jwt2');
-    expect(tickets[1]!.body.emailAccounts).toEqual(['t2@ticket.nl', 't3@ticket.nl']);
+    expect(tickets[1]!.body.emailAccounts).toEqual(['t3@ticket.nl']);
+    expect(tickets[1]!.body.notes).toContain('Still not working since our earlier ticket: t2@ticket.nl');
+    expect(service.orderTicket(order())).toMatchObject({ ticketId: 'tk2', emails: ['t2@ticket.nl', 't3@ticket.nl'], openedAt: later });
 
-    // The first one breaking again is news.
+    // The first one breaking again is news, once the cooldown has passed.
     setStatus('t1@ticket.nl', 'auth_error');
-    expect(await service.reportBrokenMailboxes(orgId)).toBe(1);
-    expect(tickets[2]!.body.emailAccounts).toEqual(emails);
+    expect(await service.reportBrokenMailboxes(orgId, later)).toBe(0);
+    expect(await service.reportBrokenMailboxes(orgId, later + service.TICKET_COOLDOWN_MS)).toBe(1);
+    expect(tickets[2]!.body.emailAccounts).toEqual(['t1@ticket.nl']);
 
-    // No portal login saved: nothing is reported.
-    service.clients.premiuminboxesPortal = () => null;
+    // Breakage caused on our side (an expired client secret) is nobody's mailbox problem.
+    for (const email of emails) setStatus(email, 'active');
     db.update(schema.providerOrders).set({ ticketJson: null }).where(eq(schema.providerOrders.id, order().id)).run();
+    setStatus('t1@ticket.nl', 'auth_error', "invalid_client: AADSTS7000222: The provided client secret keys for app 'x' are expired.");
+    setStatus('t2@ticket.nl', 'auth_error', 'Token endpoint unreachable: fetch failed');
     expect(await service.reportBrokenMailboxes(orgId)).toBe(0);
     expect(tickets).toHaveLength(3);
+    expect(service.orderTicket(order())).toBeNull();
+
+    // No portal login saved: nothing is reported.
+    setStatus('t1@ticket.nl', 'auth_error', 'invalid_grant: Bad Request');
+    service.clients.premiuminboxesPortal = () => null;
+    expect(await service.reportBrokenMailboxes(orgId)).toBe(0);
+    expect(tickets).toHaveLength(3);
+    service.clients.premiuminboxesPortal = () => portal;
     for (const email of emails) setStatus(email, 'active');
+  });
+
+  it('holds tickets when many mailboxes break at once, and lets them out when the hold outlives the breakage', async () => {
+    const { PremiumInboxesClient, PremiumInboxesPortal } = await import('../domains/premiuminboxes.js');
+    const service = await import('../domains/service.js');
+    const { db, schema } = await import('../db/index.js');
+    const { getIntegrationRow } = await import('../domains/integrations.js');
+    const { eq, like } = await import('drizzle-orm');
+    const emails = Array.from({ length: 12 }, (_, i) => `m${i + 1}@mass.nl`);
+    const client = new PremiumInboxesClient('tok', fakeFetch((url) => {
+      const path = url.replace('https://api.premiuminboxes.com/api', '');
+      if (path === '/client/order') return { body: JSON.stringify({ data: [{ _id: 'ord_m', status: 'Order Done & Delivered', emailProvider: 'Microsoft', domains: ['mass.nl'], prefixVariants: [], issues: [], inboxes: { total: 12, perDomain: 12 }, workspaceId: 'ws_m', emails: emails.map((email) => ({ firstName: 'A', lastName: 'B', email, password: 'x', status: 'active' })), createdAt: '2026-09-01T10:00:00Z', updatedAt: '2026-09-01T10:00:00Z' }] }) };
+      if (path === '/client/subscription') return { body: '{"data":[]}' };
+      return { status: 404, body: '{"message":"nope"}' };
+    }));
+    const tickets: { emailAccounts: string[] }[] = [];
+    const portal = new PremiumInboxesPortal('me@agency.test', 'secret', fakeFetch((url, init) => {
+      const path = url.replace('https://api.premiuminboxes.com/api', '');
+      if (path === '/web/auth/login') return { body: '{"token":"jwt","refreshToken":"r"}' };
+      if (path === '/web/ticket' && init?.method === 'POST') {
+        tickets.push(JSON.parse(String(init.body)));
+        return { body: JSON.stringify({ _id: `tk${tickets.length}` }) };
+      }
+      return { status: 404, body: '{"message":"nope"}' };
+    }));
+    service.clients.premiuminboxes = () => client;
+    service.clients.premiuminboxesPortal = () => portal;
+    const now = Date.now();
+    for (const email of emails) db.insert(schema.accounts).values({ id: 'acc-' + email, orgId, provider: 'microsoft', email, displayName: null, status: 'active', createdAt: now, updatedAt: now }).run();
+    await service.syncOrders(orgId);
+    const order = () => service.listOrders(orgId).find((o) => o.externalId === 'ord_m')!;
+
+    // Eleven of twelve break with a genuine-looking error: held, flagged once, no ticket.
+    for (const email of emails.slice(0, 11)) db.update(schema.accounts).set({ status: 'auth_error', lastError: 'invalid_grant: AADSTS500341: The user account has been deleted' }).where(eq(schema.accounts.email, email)).run();
+    expect(await service.reportBrokenMailboxes(orgId, now)).toBe(0);
+    expect(await service.reportBrokenMailboxes(orgId, now + 3600_000)).toBe(0);
+    expect(tickets).toHaveLength(0);
+    expect(service.orderTicket(order())).toBeNull();
+    expect(getIntegrationRow(orgId, 'premiuminboxes')?.lastError).toMatch(/^Tickets held: 11 mailboxes broke at once/);
+    const held = db.select().from(schema.activityLog).where(eq(schema.activityLog.action, 'ticket-held')).all();
+    expect(held).toHaveLength(1);
+
+    // They recover: the hold is lifted and nothing was ever sent.
+    db.update(schema.accounts).set({ status: 'active', lastError: null }).where(like(schema.accounts.email, '%@mass.nl')).run();
+    expect(await service.reportBrokenMailboxes(orgId, now + 2 * 3600_000)).toBe(0);
+
+    // They break again and stay broken past the hold: one ticket naming all of them.
+    for (const email of emails.slice(0, 11)) db.update(schema.accounts).set({ status: 'auth_error', lastError: 'invalid_grant: AADSTS500341: The user account has been deleted' }).where(eq(schema.accounts.email, email)).run();
+    const again = now + 3 * 3600_000;
+    expect(await service.reportBrokenMailboxes(orgId, again)).toBe(0);
+    expect(await service.reportBrokenMailboxes(orgId, again + service.MASS_FAILURE_HOLD_MS + 1)).toBe(1);
+    expect(tickets[0]!.emailAccounts).toEqual(emails.slice(0, 11));
+    expect(service.orderTicket(order())?.emails).toEqual(emails.slice(0, 11));
+    db.update(schema.accounts).set({ status: 'active', lastError: null }).where(like(schema.accounts.email, '%@mass.nl')).run();
   });
 
   it('turns a 429 into a readable error', async () => {

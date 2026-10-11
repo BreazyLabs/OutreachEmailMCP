@@ -8,6 +8,32 @@ export class RetryableError extends Error {
   readonly kind = 'retryable';
 }
 
+// Our own OAuth app is misconfigured at the provider — an expired or rotated
+// client secret, a deleted app registration, a redirect we no longer own.
+// Every account on that provider fails the same way at once, and none of them
+// is actually broken: fixing the app makes them all work again without a
+// reconnect. So this must never pause an account or be reported as that
+// account's fault; it retries like an outage and alerts the operator instead.
+export class ProviderConfigError extends RetryableError {
+  readonly configError = true;
+  constructor(
+    readonly provider: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+// Token-endpoint errors that mean the app, not the grant, is at fault.
+// RFC 6749 names `invalid_client` and `unauthorized_client`; Microsoft's
+// AADSTS7000xxx codes say the same about the app's keys and registration.
+const APP_SIDE_TOKEN_ERRORS = new Set(['invalid_client', 'unauthorized_client']);
+
+export function isAppSideTokenError(error: string | undefined, description: string | undefined): boolean {
+  if (error && APP_SIDE_TOKEN_ERRORS.has(error)) return true;
+  return /AADSTS(7000\d{3}|700016)\b/.test(description ?? '');
+}
+
 export class PermanentError extends Error {
   readonly kind = 'permanent';
 }
