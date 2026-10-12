@@ -7,9 +7,9 @@ import { logger } from '../logger.js';
 import { dispatchEvent } from './webhooks.js';
 import { classifyInbound } from './classify.js';
 import { findSendJobByMessageId, recordBounce, recordReply } from './correlate.js';
-import { indexMessage, isIndexed } from '../imap/index-store.js';
+import { indexMessage, isIndexed, resetMailboxIndex } from '../imap/index-store.js';
 import { logActivity } from '../observability/activity.js';
-import { isMailboxUnavailable } from '../providers/errors.js';
+import { isMailboxUnavailable, isMailboxRecreated } from '../providers/errors.js';
 import { onInboundMessage } from '../warmup/detector.js';
 import { onWarmupBounce } from '../warmup/ledger.js';
 import type { Account } from '../db/schema.js';
@@ -153,6 +153,8 @@ async function tick(): Promise<void> {
           .set({ lastPolledAt: Date.now(), lastError: String(err).slice(0, 500) })
           .where(eq(schema.syncState.accountId, account.id))
           .run();
+        // The provider swapped the mailbox under us: start over from the new one.
+        if (isMailboxRecreated(err)) resetMailboxIndex(account, String(err));
         // An account with no mailbox behind it can never recover on its own,
         // so park it with the reason instead of failing every minute forever.
         if (isMailboxUnavailable(err)) {

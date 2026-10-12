@@ -48,6 +48,21 @@ export function isMessageGone(err: unknown): boolean {
   return err instanceof MessageGoneError;
 }
 
+// Not one stale id but all of them: the provider replaced the mailbox behind
+// the account (re-provisioned, moved to another tenant, licence pulled and
+// re-added). The address and the sign-in still work, yet every message id we
+// indexed names a mailbox GUID that no longer exists. Graph says so with
+// ErrorInvalidMailboxItemId ("belongs to a different mailbox") or
+// ErrorNonExistentMailbox ("No mailbox with such guid"). The cure is to forget
+// the whole index and start again from the mailbox that is there now.
+const MAILBOX_RECREATED_SIGNALS = ['ErrorInvalidMailboxItemId', 'ErrorNonExistentMailbox'];
+
+export class MailboxRecreatedError extends MessageGoneError {}
+
+export function isMailboxRecreated(err: unknown): boolean {
+  return err instanceof MailboxRecreatedError;
+}
+
 // The account authenticates fine but has no usable mailbox behind it — a
 // Microsoft identity with no Exchange Online licence (or an on-premise
 // mailbox), or a Google account with Gmail switched off. Retrying never helps
@@ -76,6 +91,9 @@ export async function throwForResponse(res: Response, context: string): Promise<
   const message = `${context}: HTTP ${res.status} ${detail}`;
   if (res.status === 401) throw new AuthError(message);
   if (res.status === 429 || res.status >= 500) throw new RetryableError(message);
+  if (res.status === 404 && MAILBOX_RECREATED_SIGNALS.some((s) => message.includes(s))) {
+    throw new MailboxRecreatedError(message);
+  }
   // A 404 about the mailbox itself is an account problem, not a stale id
   if (res.status === 404 && !isMailboxUnavailable(message)) throw new MessageGoneError(message);
   throw new PermanentError(message);

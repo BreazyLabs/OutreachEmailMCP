@@ -25,11 +25,13 @@ import {
   forgetMessage,
   accountGrantedScopes,
   imapIndexEvents,
+  pruneVanished,
+  resetMailboxIndex,
   type FlagName,
   type CachedEnvelope,
 } from './index-store.js';
 import { logActivity } from '../observability/activity.js';
-import { isMessageGone } from '../providers/errors.js';
+import { isMessageGone, isMailboxRecreated } from '../providers/errors.js';
 import { PROVIDER_FOLDERS, type CanonicalFolder } from '../providers/types.js';
 import {
   parseMimeStructure,
@@ -465,8 +467,12 @@ export class ImapSession {
       await backfillAccount(this.account);
       try {
         await refreshAccountMailbox(this.account);
+        // The delta feed only ever adds; reconcile removals (and a mailbox
+        // the provider replaced, whose new inbox is small) now and then.
+        await pruneVanished(this.account, 'INBOX', config.IMAP_BACKFILL_COUNT);
       } catch (err) {
-        logger.debug({ err: String(err) }, 'imap select refresh failed');
+        if (isMailboxRecreated(err)) await this.restartFromNewMailbox(err);
+        else logger.debug({ err: String(err) }, 'imap select refresh failed');
       }
     } else if (this.isProviderFolder(this.folder)) {
       await this.syncFolder(this.folder);
@@ -566,6 +572,20 @@ export class ImapSession {
 
   private seqOf(msg: ImapMessage): number {
     return this.messages.findIndex((m) => m.id === msg.id) + 1;
+  }
+
+  // The provider replaced the mailbox behind this account: forget what we
+  // indexed from the old one and index the new one, so the client's next
+  // SELECT shows what is really there instead of failing on every FETCH.
+  private async restartFromNewMailbox(err: unknown): Promise<void> {
+    if (!this.account) return;
+    resetMailboxIndex(this.account, String(err));
+    try {
+      await backfillAccount(this.account);
+    } catch (e) {
+      logger.warn({ account: this.account.email, err: String(e) }, 'backfill after mailbox reset failed');
+    }
+    this.messages = messagesFor(this.account.id, this.folder);
   }
 
   private async getRaw(msg: ImapMessage): Promise<Buffer> {
@@ -757,6 +777,11 @@ export class ImapSession {
         });
         this.write(`)${CRLF}`);
       } catch (err) {
+        if (isMailboxRecreated(err)) {
+          // Every remaining target is as dead as this one; stop here.
+          await this.restartFromNewMailbox(err);
+          return this.no(tag, 'FETCH failed: the mailbox was re-created by the provider, reselect the folder');
+        }
         hadErrors = true;
         logger.warn(
           { uid: msg.uid, err: String(err) },

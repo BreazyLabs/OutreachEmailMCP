@@ -9,6 +9,8 @@ import { config } from '../config.js';
 import { logger } from '../logger.js';
 import { logActivity } from '../observability/activity.js';
 import { isWarmupMessage } from '../warmup/identity.js';
+import { isMailboxRecreated } from '../providers/errors.js';
+import type { CanonicalFolder } from '../providers/types.js';
 import type { Account, ImapMessage } from '../db/schema.js';
 
 // Emits ('indexed', accountId) whenever new messages land — IMAP IDLE hooks this.
@@ -313,6 +315,10 @@ export async function syncProviderFolder(
       const parsed = await simpleParser(raw);
       if (indexMessage(account.id, id, raw, parsed, folder)) added++;
     } catch (err) {
+      if (isMailboxRecreated(err)) {
+        resetMailboxIndex(account, String(err));
+        return { added, removed: 0 };
+      }
       logger.warn(
         { account: account.email, folder, messageId: id, err: String(err) },
         'folder sync: failed to index message',
@@ -336,6 +342,98 @@ export async function syncProviderFolder(
 // Drop a row whose upstream copy is gone (deleted, or moved and re-id'd behind
 // our back). Keeping it would make every later command against that UID fail
 // the same way, forever.
+// --- The provider replaced the mailbox ---------------------------------------
+//
+// Premium Inboxes (or any admin) can re-provision a mailbox under the same
+// address: new mailbox GUID, empty folders, same sign-in. Nothing fails loudly
+// — tokens refresh, the poller re-anchors, new mail arrives — but every row we
+// indexed before points at messages that no longer exist, so a sequencer's
+// FETCH of its own history errors forever and it may stop using the mailbox.
+// The fix is to forget the old mailbox and continue from the new one.
+
+const RESET_DEBOUNCE_MS = 10 * 60_000;
+const lastReset = new Map<string, number>();
+
+/** Drops every provider-backed row for the account and rewinds its sync
+ *  state, so the next SELECT backfills the new mailbox and the poller anchors
+ *  there. Locally stored (APPENDed) rows survive. Returns how many rows went;
+ *  0 when a reset already ran in the last ten minutes. */
+export function resetMailboxIndex(account: Account, reason: string, now = Date.now()): number {
+  if (now - (lastReset.get(account.id) ?? 0) < RESET_DEBOUNCE_MS) return 0;
+  lastReset.set(account.id, now);
+  const rows = db
+    .select()
+    .from(schema.imapMessages)
+    .where(eq(schema.imapMessages.accountId, account.id))
+    .all();
+  let dropped = 0;
+  for (const row of rows) {
+    if (row.localPath) continue;
+    db.delete(schema.imapMessages).where(eq(schema.imapMessages.id, row.id)).run();
+    dropped++;
+  }
+  db.insert(schema.syncState)
+    .values({ accountId: account.id, cursor: null, imapBackfilled: 0, lastPolledAt: null, lastError: null })
+    .onConflictDoUpdate({
+      target: schema.syncState.accountId,
+      set: { cursor: null, imapBackfilled: 0, lastError: null },
+    })
+    .run();
+  logger.warn({ account: account.email, dropped, reason }, 'mailbox re-created upstream; index reset');
+  logActivity({
+    category: 'imap',
+    action: 'mailbox-reset',
+    status: 'ok',
+    accountId: account.id,
+    detail: `The provider replaced the mailbox behind this address; ${dropped} stale message(s) forgotten, re-indexing from the new mailbox. Mail from before the switch is gone upstream.`,
+  });
+  return dropped;
+}
+
+export const PRUNE_INTERVAL_MS = 10 * 60_000;
+const lastPrune = new Map<string, number>();
+
+/** Drops index rows for messages that are no longer in the upstream folder,
+ *  without indexing anything new (the poller owns that for INBOX). Only acts
+ *  when the listing covered the whole folder, so a big mailbox is never
+ *  trimmed to its newest page, and never on an empty listing, which is more
+ *  likely a bad answer than an emptied mailbox. Rate-limited per folder. */
+export async function pruneVanished(
+  account: Account,
+  folder: CanonicalFolder,
+  limit: number,
+  now = Date.now(),
+): Promise<number> {
+  const key = `${account.id}:${folder}`;
+  if (limit <= 0 || now - (lastPrune.get(key) ?? 0) < PRUNE_INTERVAL_MS) return 0;
+  lastPrune.set(key, now);
+  const ids = await providerFor(account.provider).listMessageIds(account.id, folder, limit);
+  if (ids.length === 0 || ids.length >= limit) return 0;
+  const idSet = new Set(ids);
+  const existing = db
+    .select()
+    .from(schema.imapMessages)
+    .where(and(eq(schema.imapMessages.accountId, account.id), eq(schema.imapMessages.folder, folder)))
+    .all();
+  let removed = 0;
+  for (const row of existing) {
+    if (row.localPath || idSet.has(row.providerMessageId)) continue;
+    db.delete(schema.imapMessages).where(eq(schema.imapMessages.id, row.id)).run();
+    removed++;
+  }
+  if (removed > 0) {
+    logger.info({ account: account.email, folder, removed }, 'pruned messages that left the folder upstream');
+    logActivity({
+      category: 'imap',
+      action: 'folder-sync',
+      status: 'ok',
+      accountId: account.id,
+      detail: `${folder}: -${removed} (no longer in the mailbox)`,
+    });
+  }
+  return removed;
+}
+
 export function forgetMessage(row: ImapMessage): void {
   if (row.localPath) fs.rmSync(row.localPath, { force: true });
   db.delete(schema.imapMessages).where(eq(schema.imapMessages.id, row.id)).run();
