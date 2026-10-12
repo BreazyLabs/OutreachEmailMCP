@@ -273,8 +273,39 @@ export class PremiumInboxesPortal {
 
   /** Opens a ticket in the workspace the order lives in; returns its id when the portal says. */
   async createTicket(input: PiTicketInput, workspaceId: string | null): Promise<string | null> {
-    const r = await this.call<{ _id?: string; id?: string } | string>('POST', '/web/ticket', input, workspaceId);
-    if (r && typeof r === 'object') return r._id ?? r.id ?? null;
-    return null;
+    const r = await this.call<unknown>('POST', '/web/ticket', input, workspaceId);
+    return ticketIdOf(r);
   }
+
+  /** Every ticket the portal account can see, newest first; `status` is "New Ticket", "In Progress" or "Done". */
+  async listTickets(workspaceId: string | null): Promise<PiTicket[]> {
+    const r = await this.call<{ data?: PiTicket[] } | PiTicket[]>('GET', '/web/ticket?page=1&limit=100', undefined, workspaceId);
+    const rows = Array.isArray(r) ? r : (r?.data ?? []);
+    return rows.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+  }
+}
+
+export interface PiTicket {
+  _id: string;
+  status: string;
+  type?: string;
+  order?: string | { _id: string };
+  emailAccounts?: string[];
+  notes?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+/** The portal wraps a created ticket differently per endpoint version; dig the id out of the usual places. */
+export function ticketIdOf(r: unknown): string | null {
+  if (!r || typeof r !== 'object') return null;
+  const o = r as Record<string, unknown>;
+  for (const candidate of [o, o.data, o.ticket, o.result]) {
+    if (candidate && typeof candidate === 'object') {
+      const c = candidate as Record<string, unknown>;
+      const id = c._id ?? c.id;
+      if (typeof id === 'string' && id) return id;
+    }
+  }
+  return null;
 }

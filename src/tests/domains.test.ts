@@ -305,7 +305,8 @@ describe('Premium Inboxes client and order flow', () => {
       if (path === '/web/ticket' && init?.method === 'POST') {
         if (expireNext) { expireNext = false; return { status: 401, body: '{"name":"UnauthorizedError","message":"Token expired or invalid"}' }; }
         tickets.push({ headers, body: JSON.parse(String(init.body)) });
-        return { body: JSON.stringify({ _id: `tk${tickets.length}` }) };
+        // The portal has answered both bare and wrapped; the id must be found either way.
+        return { body: JSON.stringify(tickets.length % 2 ? { _id: `tk${tickets.length}` } : { message: 'created', data: { _id: `tk${tickets.length}` } }) };
       }
       return { status: 404, body: '{"message":"nope"}' };
     }));

@@ -78,3 +78,16 @@ describe('token endpoint errors about our own app', () => {
     expect(row()).toEqual({ status: 'active', lastError: null });
   });
 });
+
+describe('ticketIdOf', () => {
+  it('finds the ticket id whether the portal answers bare or wrapped', async () => {
+    const { ticketIdOf } = await import('../domains/premiuminboxes.js');
+    expect(ticketIdOf({ _id: 'a' })).toBe('a');
+    expect(ticketIdOf({ id: 'b' })).toBe('b');
+    expect(ticketIdOf({ message: 'created', data: { _id: 'c' } })).toBe('c');
+    expect(ticketIdOf({ ticket: { _id: 'd' } })).toBe('d');
+    expect(ticketIdOf({ message: 'created' })).toBeNull();
+    expect(ticketIdOf('ok')).toBeNull();
+    expect(ticketIdOf(null)).toBeNull();
+  });
+});
